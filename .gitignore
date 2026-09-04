@@ -1,0 +1,10 @@
+.env
+data/raw/*.csv
+data/clean/*.csv
+data/*.db
+data/*.db-wal
+data/*.db-shm
+logs/
+output/
+__pycache__/
+*.pyc

@@ -1,0 +1,23 @@
+{
+  "ai": {
+    "api_key_env": "OPENAI_API_KEY",
+    "model": "gpt-4o-mini",
+    "timeout": 30,
+    "retry": 2
+  },
+  "cleaning": {
+    "duplicate_policy": "skip",
+    "min_review_length": 5
+  },
+  "columns": {
+    "text": ["review", "content", "리뷰", "리뷰내용"],
+    "rating": ["rating", "score", "별점"],
+    "date": ["date", "created_at", "작성일"],
+    "product": ["product", "상품명", "제품명"]
+  },
+  "paths": {
+    "raw": "data/raw",
+    "clean": "data/clean",
+    "output": "output"
+  }
+}
