@@ -127,3 +127,75 @@ def clean_reviews(reviews: list[dict]) -> list[dict]:
         cleaned_reviews.append(cleaned)
 
     return cleaned_reviews
+
+
+def run(
+    db_path: str,
+    config: dict,
+    dedup_policy: str = "skip",
+) -> dict:
+    """
+    raw_reviews의 데이터를 정제해서 clean_reviews에 저장한다.
+
+    반환 예:
+    {
+        "processed": 10,
+        "inserted": 8,
+        "skipped": 2,
+    }
+    """
+    from src.repository import (
+        get_connection,
+        get_raw_reviews_for_cleaning,
+        insert_clean_review,
+    )
+
+    processed = 0
+    inserted = 0
+    skipped = 0
+
+    conn = get_connection(db_path)
+
+    try:
+        raw_reviews = get_raw_reviews_for_cleaning(conn)
+
+        for row in raw_reviews:
+            processed += 1
+
+            review = {
+                "raw_text": row["raw_text"],
+                "raw_rating": row["raw_rating"],
+                "raw_date": row["raw_date"],
+                "raw_product": row["raw_product"],
+                "source_file": row["source_file"],
+            }
+
+            cleaned = clean_review(review)
+
+            if not cleaned["cleaned_text"]:
+                skipped += 1
+                continue
+
+            cleaned["raw_id"] = row["id"]
+
+            was_inserted = insert_clean_review(
+                conn,
+                cleaned,
+                dedup_policy=dedup_policy,
+            )
+
+            if was_inserted:
+                inserted += 1
+            else:
+                skipped += 1
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    return {
+        "processed": processed,
+        "inserted": inserted,
+        "skipped": skipped,
+    }

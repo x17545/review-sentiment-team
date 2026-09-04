@@ -304,17 +304,59 @@ def initialize_database(db_path: str, verbose: bool = False) -> None:
 # ---------------------------------------------------------------------------
 def cmd_import(args: argparse.Namespace, config: dict[str, Any]) -> None:
     file_path = args.file
+
     if file_path is None:
-        file_path = prompt_until("리뷰 파일 경로(CSV/Excel): ", existing_review_file)
+        file_path = prompt_until(
+            "리뷰 파일 경로(CSV/Excel): ",
+            existing_review_file,
+        )
+
     print(f"[import] db={args.db}, file={file_path}")
-    # TODO: rows = collector.read_reviews(file_path, config)
-    #       for row in rows: repository.insert_raw_review(conn, ...)
+
+    from src.collector import read_reviews
+    from src.repository import get_connection, insert_raw_review
+
+    rows = read_reviews(file_path, config)
+
+    conn = get_connection(args.db)
+
+    inserted = 0
+
+    try:
+        for row in rows:
+            insert_raw_review(conn, row)
+            inserted += 1
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    print(f"가져오기 완료: {inserted}건 저장")
 
 
 def cmd_clean(args: argparse.Namespace, config: dict[str, Any]) -> None:
     dedup_policy = resolve_dedup_policy(args, config)
-    print(f"[clean] db={args.db}, dedup_policy={dedup_policy}")
-    # TODO: cleaner.run(db_path=args.db, config=config, dedup_policy=dedup_policy)
+
+    print(
+        f"[clean] db={args.db}, "
+        f"dedup_policy={dedup_policy}"
+    )
+
+    from src import cleaner
+
+    result = cleaner.run(
+        db_path=args.db,
+        config=config,
+        dedup_policy=dedup_policy,
+    )
+
+    print(
+        f"정제 완료: "
+        f"처리 {result['processed']}건, "
+        f"저장 {result['inserted']}건, "
+        f"제외 {result['skipped']}건"
+    )
 
 
 def cmd_analyze(args: argparse.Namespace, config: dict[str, Any]) -> None:
