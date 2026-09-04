@@ -154,9 +154,15 @@ def run(
     inserted = 0
     skipped = 0
 
-    conn = get_connection(db_path)
+    min_review_length = config.get(
+        "cleaning",
+        {}
+    ).get(
+        "min_review_length",
+        5
+    )
 
-    try:
+    with get_connection(db_path) as conn:
         raw_reviews = get_raw_reviews_for_cleaning(conn)
 
         for row in raw_reviews:
@@ -172,27 +178,25 @@ def run(
 
             cleaned = clean_review(review)
 
-            if not cleaned["cleaned_text"]:
+            if (
+                not cleaned["cleaned_text"]
+                or len(cleaned["cleaned_text"]) < min_review_length
+            ):
                 skipped += 1
                 continue
 
             cleaned["raw_id"] = row["id"]
 
-            was_inserted = insert_clean_review(
+            result = insert_clean_review(
                 conn,
                 cleaned,
                 dedup_policy=dedup_policy,
             )
 
-            if was_inserted:
+            if result["inserted"]:
                 inserted += 1
             else:
                 skipped += 1
-
-        conn.commit()
-
-    finally:
-        conn.close()
 
     return {
         "processed": processed,

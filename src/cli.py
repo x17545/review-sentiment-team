@@ -314,23 +314,16 @@ def cmd_import(args: argparse.Namespace, config: dict[str, Any]) -> None:
     print(f"[import] db={args.db}, file={file_path}")
 
     from src.collector import read_reviews
-    from src.repository import get_connection, insert_raw_review
+    from src.repository import get_connection, insert_raw_review_row
 
     rows = read_reviews(file_path, config)
 
-    conn = get_connection(args.db)
-
     inserted = 0
 
-    try:
+    with get_connection(args.db) as conn:
         for row in rows:
-            insert_raw_review(conn, row)
+            insert_raw_review_row(conn, row)
             inserted += 1
-
-        conn.commit()
-
-    finally:
-        conn.close()
 
     print(f"가져오기 완료: {inserted}건 저장")
 
