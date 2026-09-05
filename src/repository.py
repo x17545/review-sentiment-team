@@ -165,10 +165,9 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         ON clean_reviews(raw_id);
         """)
 
-        conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_clean_reviews_text_hash
-        ON clean_reviews(text_hash);
-        """)
+        # [3-7 수정] text_hash는 UNIQUE 제약이 있어 SQLite가 유니크 인덱스를
+        #   자동 생성합니다. 별도 인덱스는 중복이라 쓰기 성능만 깎으므로 제거했습니다.
+        #   (idx_clean_reviews_text_hash 삭제)
 
         conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_clean_reviews_review_date
@@ -249,66 +248,25 @@ def insert_clean_review_skip_duplicate(
     product_name: Optional[str] = None,
 ) -> dict[str, Any]:
     """
-    정제 리뷰를 clean_reviews에 저장합니다.
+    [DEPRECATED / 3-1 정리] 구버전 함수. 신버전 insert_clean_review()로 위임합니다.
 
-    중복 정책:
-    - text_hash가 없으면 INSERT
-    - text_hash가 이미 있으면 INSERT하지 않고 기존 id 반환
-    - 즉, 기본 정책은 skip
-
-    Returns:
-        {
-            "id": clean_reviews.id,
-            "inserted": bool,
-            "duplicate": bool
-        }
+    정책(중복 판정·skip/upsert)을 한 곳(insert_clean_review)에만 두기 위해,
+    이 함수는 인자를 dict로 묶어 신버전을 호출하는 얇은 wrapper로만 남깁니다.
+    기존 호출 코드가 깨지지 않도록 유지하되, 새 코드는 insert_clean_review()를 쓰세요.
     """
-    cur = conn.execute("""
-    INSERT INTO clean_reviews (
-        raw_id,
-        source_file,
-        text_hash,
-        cleaned_text,
-        rating,
-        review_date,
-        product_name
+    return insert_clean_review(
+        conn,
+        {
+            "raw_id": raw_id,
+            "source_file": source_file,
+            "text_hash": text_hash,
+            "cleaned_text": cleaned_text,
+            "rating": rating,
+            "review_date": review_date,
+            "product_name": product_name,
+        },
+        dedup_policy="skip",
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(text_hash) DO NOTHING
-    """, (
-        raw_id,
-        source_file,
-        text_hash,
-        cleaned_text,
-        rating,
-        review_date,
-        product_name,
-    ))
-
-    if cur.rowcount == 1:
-        return {
-            "id": int(cur.lastrowid),
-            "inserted": True,
-            "duplicate": False,
-        }
-
-    row = conn.execute("""
-    SELECT id
-    FROM clean_reviews
-    WHERE text_hash = ?
-    """, (text_hash,)).fetchone()
-
-    if row is None:
-        raise RuntimeError(
-            "clean_reviews insert skipped, but existing row was not found. "
-            f"text_hash={text_hash}"
-        )
-
-    return {
-        "id": int(row["id"]),
-        "inserted": False,
-        "duplicate": True,
-    }
 
 
 def insert_analysis_result(
@@ -323,67 +281,49 @@ def insert_analysis_result(
     """
     감정 분석 결과를 analysis_results에 저장합니다.
 
-    동일한 review_id, model_name, prompt_version 조합이 이미 있으면
-    중복 저장하지 않고 기존 id를 반환합니다.
+    [--all 재분석 정책] 같은 (review_id, model_name, prompt_version) 조합이
+      이미 있으면 '기존 행을 덮어씁니다'(재분석 결과 반영).
+      --unanalyzed 경로는 애초에 미분석 리뷰만 넘어오므로 신규 INSERT가 되고,
+      --all 경로에서 이미 분석된 리뷰가 들어오면 이 덮어쓰기가 동작합니다.
+      이력을 새 행으로 쌓지 않고 같은 조합을 갱신하는 방식입니다.
+
+    lastrowid 추정을 쓰지 않고, 존재 여부를 먼저 확인한 뒤 분기합니다
+    (insert_clean_review과 동일한 안전 패턴).
 
     Returns:
         {
             "id": analysis_results.id,
-            "inserted": bool,
-            "duplicate": bool
+            "inserted": bool,   # 신규 저장이면 True
+            "updated": bool     # 기존 결과를 덮어썼으면 True
         }
     """
+    existing = conn.execute("""
+    SELECT id FROM analysis_results
+    WHERE review_id = ? AND model_name = ? AND prompt_version = ?
+    """, (review_id, model_name, prompt_version)).fetchone()
+
+    # 이미 있으면 덮어쓰기 (재분석)
+    if existing is not None:
+        conn.execute("""
+        UPDATE analysis_results
+        SET sentiment = ?, confidence = ?, raw_response = ?,
+            analyzed_at = datetime('now', 'localtime')
+        WHERE id = ?
+        """, (sentiment, confidence, raw_response, existing["id"]))
+        return {"id": int(existing["id"]), "inserted": False, "updated": True}
+
+    # 없으면 신규 저장
     cur = conn.execute("""
     INSERT INTO analysis_results (
-        review_id,
-        sentiment,
-        confidence,
-        model_name,
-        prompt_version,
-        raw_response
+        review_id, sentiment, confidence,
+        model_name, prompt_version, raw_response
     )
     VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(review_id, model_name, prompt_version) DO NOTHING
     """, (
-        review_id,
-        sentiment,
-        confidence,
-        model_name,
-        prompt_version,
-        raw_response,
+        review_id, sentiment, confidence,
+        model_name, prompt_version, raw_response,
     ))
-
-    if cur.rowcount == 1:
-        return {
-            "id": int(cur.lastrowid),
-            "inserted": True,
-            "duplicate": False,
-        }
-
-    row = conn.execute("""
-    SELECT id
-    FROM analysis_results
-    WHERE review_id = ?
-      AND model_name = ?
-      AND prompt_version = ?
-    """, (
-        review_id,
-        model_name,
-        prompt_version,
-    )).fetchone()
-
-    if row is None:
-        raise RuntimeError(
-            "analysis_results insert skipped, but existing row was not found. "
-            f"review_id={review_id}, model_name={model_name}, "
-            f"prompt_version={prompt_version}"
-        )
-
-    return {
-        "id": int(row["id"]),
-        "inserted": False,
-        "duplicate": True,
-    }
+    return {"id": int(cur.lastrowid), "inserted": True, "updated": False}
 
 
 def insert_extraction_result(
@@ -442,50 +382,45 @@ def get_unanalyzed_reviews(
     limit: Optional[int] = None,
 ) -> list[sqlite3.Row]:
     """
-    아직 감정 분석이 완료되지 않은 clean_reviews 목록을 조회합니다.
+    [DEPRECATED / 3-1 정리] 구버전 함수. 신버전 get_reviews_for_analysis()로 위임합니다.
 
-    주의:
-    이 함수는 DB 조회만 수행합니다.
-    AI API 호출은 이 함수 호출 이후 DB 트랜잭션 밖에서 수행하는 것을 권장합니다.
+    '미분석 조회' 로직을 한 곳에만 두기 위해, 이 함수는 신버전을 호출하는
+    wrapper로만 남깁니다. 새 코드는 get_reviews_for_analysis(...)를 쓰세요.
+    (반환 컬럼: id, cleaned_text, rating, review_date, product_name)
     """
-    sql = """
-    SELECT
-        cr.id,
-        cr.cleaned_text,
-        cr.rating,
-        cr.review_date,
-        cr.product_name,
-        cr.source_file
-    FROM clean_reviews cr
-    LEFT JOIN analysis_results ar
-        ON cr.id = ar.review_id
-       AND ar.model_name = ?
-       AND ar.prompt_version = ?
-    WHERE ar.id IS NULL
-    ORDER BY cr.id ASC
-    """
-
-    params: list[Any] = [model_name, prompt_version]
-
-    if limit is not None:
-        sql += " LIMIT ?"
-        params.append(limit)
-
-    return conn.execute(sql, params).fetchall()
+    return get_reviews_for_analysis(
+        conn,
+        review_id=None,
+        analyze_all=False,
+        model_name=model_name,
+        prompt_version=prompt_version,
+        limit=limit,
+    )
 
 
-def get_sentiment_stats(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_sentiment_stats(
+    conn: sqlite3.Connection,
+    model_name: str,
+    prompt_version: str = "v1",
+) -> list[sqlite3.Row]:
     """
     감정 분포 통계를 조회합니다.
+
+    [3-4 수정] 특정 model_name + prompt_version 기준으로만 집계합니다.
+      모델 기준이 없으면, 같은 리뷰를 여러 모델로 분석했을 때
+      감정 카운트가 중복 합산되어 통계가 부풀려집니다.
+      호출 시 config.json의 ai.model 값을 그대로 넘기세요.
     """
     return conn.execute("""
     SELECT
         sentiment,
         COUNT(*) AS count
     FROM analysis_results
+    WHERE model_name = ?
+      AND prompt_version = ?
     GROUP BY sentiment
     ORDER BY count DESC
-    """).fetchall()
+    """, (model_name, prompt_version)).fetchall()
 
 
 def get_review_count(conn: sqlite3.Connection) -> dict[str, int]:
@@ -593,11 +528,51 @@ def insert_clean_review(
     반환: {"id": clean_reviews.id, "inserted": bool, "duplicate": bool}
       - inserted=True  : 신규 저장됨
       - duplicate=True  : text_hash 충돌 발생 (skip이면 무시, upsert면 갱신됨)
+
+    [2-5 정책 명시] upsert 시 raw_id 와 source_file 은 갱신하지 않습니다(최초 출처 유지).
+      즉 같은 text_hash가 다른 파일/행에서 다시 들어와도 '처음 저장된 출처'가 남습니다.
+      갱신 대상은 cleaned_text, rating, review_date, product_name 뿐입니다.
+      (최신 출처로 바꾸고 싶으면 UPDATE 문에 raw_id, source_file을 추가하세요.)
     """
     if dedup_policy not in ("skip", "upsert"):
         raise ValueError(f"알 수 없는 dedup_policy: {dedup_policy!r} (skip/upsert)")
 
-    params = (
+    # [3-2 수정] lastrowid로 신규/갱신을 '추정'하지 않는다.
+    #   SQLite에서 ON CONFLICT DO UPDATE 시 lastrowid는 신뢰할 수 없어,
+    #   update인데 inserted=True로 잘못 판단할 수 있다.
+    #   → 먼저 존재 여부를 명시적으로 확인한 뒤 분기한다.
+    existing = conn.execute(
+        "SELECT id FROM clean_reviews WHERE text_hash = ?",
+        (row["text_hash"],),
+    ).fetchone()
+
+    # 1) 이미 존재 + skip → 아무것도 하지 않고 기존 id 반환
+    if existing is not None and dedup_policy == "skip":
+        return {"id": int(existing["id"]), "inserted": False, "duplicate": True}
+
+    # 2) 이미 존재 + upsert → 기존 행 갱신 (텍스트 외 값을 최신으로)
+    if existing is not None and dedup_policy == "upsert":
+        conn.execute("""
+        UPDATE clean_reviews
+        SET cleaned_text = ?, rating = ?, review_date = ?, product_name = ?
+        WHERE text_hash = ?
+        """, (
+            row["cleaned_text"],
+            row.get("rating"),
+            row.get("review_date"),
+            row.get("product_name"),
+            row["text_hash"],
+        ))
+        return {"id": int(existing["id"]), "inserted": False, "duplicate": True}
+
+    # 3) 신규 → INSERT 후 새 id 반환
+    cur = conn.execute("""
+    INSERT INTO clean_reviews (
+        raw_id, source_file, text_hash, cleaned_text,
+        rating, review_date, product_name
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
         row["raw_id"],
         row["source_file"],
         row["text_hash"],
@@ -605,57 +580,8 @@ def insert_clean_review(
         row.get("rating"),
         row.get("review_date"),
         row.get("product_name"),
-    )
-
-    if dedup_policy == "skip":
-        # 충돌 시 아무것도 하지 않음
-        cur = conn.execute("""
-        INSERT INTO clean_reviews (
-            raw_id, source_file, text_hash, cleaned_text,
-            rating, review_date, product_name
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(text_hash) DO NOTHING
-        """, params)
-    else:  # upsert: 충돌 시 기존 행 갱신 (raw_id/텍스트 외 값을 최신으로)
-        cur = conn.execute("""
-        INSERT INTO clean_reviews (
-            raw_id, source_file, text_hash, cleaned_text,
-            rating, review_date, product_name
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(text_hash) DO UPDATE SET
-            cleaned_text  = excluded.cleaned_text,
-            rating        = excluded.rating,
-            review_date   = excluded.review_date,
-            product_name  = excluded.product_name
-        """, params)
-
-    # 신규 INSERT면 rowcount==1 이고 lastrowid가 새 id
-    if cur.rowcount == 1 and cur.lastrowid:
-        # upsert로 '갱신'된 경우도 rowcount가 1일 수 있어, 신규 여부를 별도 확인
-        row_db = conn.execute(
-            "SELECT id FROM clean_reviews WHERE text_hash = ?",
-            (row["text_hash"],),
-        ).fetchone()
-        # lastrowid가 실제 그 해시의 id와 같으면 신규 INSERT로 판단
-        is_new = row_db is not None and int(row_db["id"]) == int(cur.lastrowid)
-        return {
-            "id": int(row_db["id"]),
-            "inserted": is_new,
-            "duplicate": not is_new,
-        }
-
-    # 충돌(skip으로 무시됐거나 upsert로 갱신) → 기존 id 조회
-    existing = conn.execute(
-        "SELECT id FROM clean_reviews WHERE text_hash = ?",
-        (row["text_hash"],),
-    ).fetchone()
-    if existing is None:
-        raise RuntimeError(
-            f"clean_reviews 저장 후 행을 찾지 못했습니다. text_hash={row['text_hash']}"
-        )
-    return {"id": int(existing["id"]), "inserted": False, "duplicate": True}
+    ))
+    return {"id": int(cur.lastrowid), "inserted": True, "duplicate": False}
 
 
 # ===========================================================================
@@ -666,7 +592,7 @@ def get_reviews_for_analysis(
     conn: sqlite3.Connection,
     review_id: Optional[int] = None,
     analyze_all: bool = False,
-    model_name: str = "",
+    model_name: Optional[str] = None,
     prompt_version: str = "v1",
     limit: Optional[int] = None,
 ) -> list[sqlite3.Row]:
@@ -684,9 +610,17 @@ def get_reviews_for_analysis(
       덕분에 같은 리뷰를 다른 모델/프롬프트로 재분석하는 흐름이 막히지 않습니다.
       (analysis_results가 UNIQUE(review_id, model_name, prompt_version)인 것과 일관)
 
+    [2-2 수정] model_name 기본값을 None으로 바꾸고, 미분석 조회(기본 분기)에서는
+      model_name을 필수로 강제합니다. 빈 문자열 기준으로 조회하면 실제 모델과
+      다른 미분석 판정이 나오기 때문입니다. config.json의 ai.model 값을 넘기세요.
+
     반환 컬럼(요청대로 포함):
       id, cleaned_text, rating, review_date, product_name
     """
+    # 미분석 조회(=review_id 없고 analyze_all 아님)일 때만 model_name 필수
+    if review_id is None and not analyze_all and not model_name:
+        raise ValueError("미분석 리뷰 조회 시 model_name은 필수입니다.")
+
     base_cols = """
         cr.id,
         cr.cleaned_text,
@@ -733,6 +667,8 @@ def get_reviews_for_extraction(
     product: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    model_name: Optional[str] = None,
+    prompt_version: str = "v1",
     limit: Optional[int] = None,
 ) -> list[sqlite3.Row]:
     """
@@ -742,15 +678,30 @@ def get_reviews_for_extraction(
     감정 필터가 있을 때만 analysis_results와 조인합니다.
     (감정은 clean_reviews가 아니라 분석 결과에 있으므로)
 
+    [3-5 / 2-1 수정] 감정 필터 사용 시 model_name을 '필수'로 강제합니다.
+      model_name이 없으면 같은 리뷰의 여러 모델 결과가 모두 조인되어
+      중복 row가 생기고, 어떤 모델의 sentiment인지 불명확해집니다.
+      따라서 sentiment를 넘길 때는 model_name도 반드시 함께 넘겨야 합니다.
+      (product/date만으로 조회할 때는 model_name 불필요)
+
     반환 컬럼:
       id, cleaned_text, rating, review_date, product_name, sentiment(있으면)
     """
+    # 감정 필터를 쓰면서 모델을 지정하지 않으면 중복 위험 → 막는다
+    if sentiment is not None and not model_name:
+        raise ValueError("sentiment 필터 사용 시 model_name은 필수입니다.")
+
     where: list[str] = []
     params: list[Any] = []
 
-    # 감정 조건이 있으면 조인, 없으면 순수 clean_reviews 조회
+    # 감정 조건이 있으면 조인(모델/프롬프트 기준 포함), 없으면 순수 clean_reviews 조회
     if sentiment is not None:
-        join = "JOIN analysis_results ar ON ar.review_id = cr.id"
+        join = (
+            "JOIN analysis_results ar ON ar.review_id = cr.id "
+            "AND ar.model_name = ? AND ar.prompt_version = ?"
+        )
+        params.append(model_name)
+        params.append(prompt_version)
         sentiment_col = ", ar.sentiment"
         where.append("ar.sentiment = ?")
         params.append(sentiment)
