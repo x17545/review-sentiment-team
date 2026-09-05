@@ -362,7 +362,41 @@ def cmd_analyze(args: argparse.Namespace, config: dict[str, Any]) -> None:
     else:
         target = "unanalyzed"
     print(f"[analyze] db={args.db}, target={target}, limit={args.limit}")
-    # TODO: 대상 선택 -> ai_client.analyze(...) -> repository.insert_analysis_result(...)
+    from src.analyzer import analyze_reviews_from_db
+
+    model_name = config["ai"]["model"]
+
+    results = analyze_reviews_from_db(
+        db_path=args.db,
+        model_name=model_name,
+        review_id=args.id,
+        analyze_all=args.all,
+        limit=args.limit,
+    )
+
+    if not results:
+        print("분석할 리뷰가 없습니다.")
+        return
+
+    success_count = sum(
+        1 for result in results
+        if result.get("status") == "success"
+    )
+    failed_count = len(results) - success_count
+    inserted_count = sum(
+        1 for result in results
+        if result.get("inserted") is True
+    )
+    updated_count = sum(
+        1 for result in results
+        if result.get("updated") is True
+    )
+
+    print(
+        f"분석 완료: 처리 {len(results)}건, "
+        f"성공 {success_count}건, 실패 {failed_count}건, "
+        f"신규 저장 {inserted_count}건, 갱신 {updated_count}건"
+    ) 
 
 
 def cmd_extract(args: argparse.Namespace, config: dict[str, Any]) -> None:
@@ -371,7 +405,33 @@ def cmd_extract(args: argparse.Namespace, config: dict[str, Any]) -> None:
         f"[extract] db={args.db}, sentiment={args.sentiment}, product={args.product}, "
         f"date_from={args.date_from}, date_to={args.date_to}, limit={args.limit}"
     )
-    # TODO: analyzer.extract_keywords(...) -> repository.insert_extraction_result(...)
+    from src.analyzer import extract_insights_from_db
+
+    model_name = config["ai"]["model"]
+
+    result = extract_insights_from_db(
+        db_path=args.db,
+        model_name=model_name,
+        sentiment=args.sentiment,
+        product=args.product,
+        date_from=args.date_from,
+        date_to=args.date_to,
+        limit=args.limit,
+    )
+
+    if result.get("status") != "success":
+        if result.get("error") == "no_reviews":
+            print("추출할 리뷰가 없습니다.")
+        else:
+            print(f"추출 실패: {result.get('error', '알 수 없는 오류')}")
+        return
+
+    print(f"추출 완료: 리뷰 {result['review_count']}건")
+    print(f"긍정 키워드: {', '.join(result['positive_keywords'])}")
+    print(f"부정 키워드: {', '.join(result['negative_keywords'])}")
+    print(f"요약: {result['summary']}")
+    print(f"개선 제안: {', '.join(result['suggestions'])}")
+    print(f"DB 저장 ID: {result['extraction_id']}")
 
 
 def cmd_list(args: argparse.Namespace, config: dict[str, Any]) -> None:
