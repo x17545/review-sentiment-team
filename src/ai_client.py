@@ -1,22 +1,25 @@
 # src/ai_client.py
-"""
-ai_client 모듈 (미구현 스텁).
-TODO: cli.py의 각 핸들러(# TODO 표시)에서 호출될 함수를 여기에 구현합니다.
-"""
+
 import os
 
 from dotenv import load_dotenv
 from openai import OpenAI
+
 
 load_dotenv()
 
 api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 
-def analyze_sentiment(review_text: str) -> dict:
+
+def analyze_sentiment(review_text: str, model_name: str) -> dict:
+    """
+    리뷰 1건의 감정을 분석합니다.
+    model_name은 config.json의 ai.model 값을 전달받아 사용합니다.
+    """
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model=model_name,
             input=f"""
 다음 고객 리뷰의 감정을 분석하세요.
 
@@ -71,14 +74,20 @@ confidence: 0.0부터 1.0 사이 숫자
             "confidence": 0.0,
             "error": str(e),
         }
-def extract_insights(review_texts: list[str]) -> dict:
+
+
+def extract_insights(review_texts: list[str], model_name: str) -> dict:
+    """
+    여러 리뷰에서 긍정/부정 키워드, 요약, 개선 제안을 추출합니다.
+    model_name은 config.json의 ai.model 값을 전달받아 사용합니다.
+    """
     joined_reviews = "\n".join(
         f"- {text}" for text in review_texts
     )
 
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model=model_name,
             input=f"""
 다음 고객 리뷰들을 분석하세요.
 
@@ -92,7 +101,7 @@ negative_keywords: 부정 키워드 3개
 summary: 전체 리뷰 요약 1~2문장
 suggestions: 개선 제안 3개
 
-반드시 아래 형식을 지키세요.
+반드시 아래 형식을 지켜주세요.
 
 positive_keywords: 키워드1 | 키워드2 | 키워드3
 negative_keywords: 키워드1 | 키워드2 | 키워드3
@@ -136,6 +145,12 @@ suggestions: 제안1 | 제안2 | 제안3
                     if item.strip()
                 ]
 
+        if not summary:
+            return {
+                "status": "failed",
+                "error": "invalid_summary",
+            }
+
         return {
             "status": "success",
             "positive_keywords": positive_keywords,
@@ -147,9 +162,5 @@ suggestions: 제안1 | 제안2 | 제안3
     except Exception as e:
         return {
             "status": "failed",
-            "positive_keywords": [],
-            "negative_keywords": [],
-            "summary": "",
-            "suggestions": [],
             "error": str(e),
         }
