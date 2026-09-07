@@ -48,6 +48,36 @@ def get_connection(db_path: str = DEFAULT_DB_PATH):
         conn.close()
 
 
+def column_exists(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+) -> bool:
+    """특정 테이블에 컬럼이 존재하는지 확인합니다."""
+    # table_name은 내부 스키마 마이그레이션에서만 고정값으로 전달합니다.
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(row["name"] == column_name for row in rows)
+
+
+def migrate_schema(conn: sqlite3.Connection) -> None:
+    """기존 DB를 현재 스키마로 안전하게 마이그레이션합니다."""
+    if not column_exists(conn, "raw_reviews", "processed"):
+        conn.execute("""
+        ALTER TABLE raw_reviews
+        ADD COLUMN processed INTEGER NOT NULL DEFAULT 0
+        """)
+
+        # 구버전 DB에서 이미 clean_reviews로 정제된 raw는 재처리하지 않도록 백필합니다.
+        conn.execute("""
+        UPDATE raw_reviews
+        SET processed = 1
+        WHERE id IN (
+            SELECT raw_id
+            FROM clean_reviews
+        )
+        """)
+
+
 def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
     """
     Project C 리뷰 감정 분석 대시보드용 DB 스키마를 초기화합니다.
@@ -155,9 +185,18 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         );
         """)
 
+        # CREATE TABLE IF NOT EXISTS는 기존 테이블의 컬럼을 변경하지 않으므로,
+        # 인덱스를 만들기 전에 누락 컬럼을 먼저 보강합니다.
+        migrate_schema(conn)
+
         conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_raw_reviews_source_file
         ON raw_reviews(source_file);
+        """)
+
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_raw_reviews_processed
+        ON raw_reviews(processed, id);
         """)
 
         conn.execute("""
