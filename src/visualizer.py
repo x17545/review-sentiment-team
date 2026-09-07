@@ -8,7 +8,6 @@ src/visualizer.py
 
 import os
 import platform
-import sqlite3
 import matplotlib.pyplot as plt
 import pandas as pd
 import random
@@ -26,8 +25,15 @@ def setup_korean_font():
     plt.rc("axes", unicode_minus=False)
 
 
-def fetch_dataframe_for_chart(db_path: str) -> pd.DataFrame:
-    """DB에서 차트 생성용 데이터 조회 (데이터 부족 시 Mock 반환)"""
+def fetch_dataframe_for_chart(db_path: str, use_mock: bool = False) -> pd.DataFrame:
+    """
+    DB에서 차트 생성용 데이터 조회.
+    - 기본 동작: 데이터가 없거나 실패 시 빈 DataFrame 반환
+    - 테스트 모드(use_mock=True): 명시적으로 요청 시에만 Mock 120건 반환
+    """
+    if use_mock:
+        return _make_mock_data()
+
     try:
         from src.repository import get_connection
         with get_connection(db_path) as conn:
@@ -42,17 +48,15 @@ def fetch_dataframe_for_chart(db_path: str) -> pd.DataFrame:
                 JOIN analysis_results a ON c.id = a.review_id
             """
             df = pd.read_sql_query(query, conn)
-            if not df.empty:
-                return df
-            return _make_mock_data()
+            return df
     except Exception as e:
-        print(f"[경고] 차트용 DB 조회 실패, mock 사용: {e}")
-        return _make_mock_data()
+        print(f"[경고] 차트용 DB 조회 실패 (데이터 없음 처리): {e}")
+        return pd.DataFrame()
 
 
 def _make_mock_data() -> pd.DataFrame:
-    """DB에 데이터가 없을 때 파이프라인 검증용 Mock Data (시드 고정으로 데이터 일관성 보장)"""
-    random.seed(42)  # 매 호출 시 동일한 난수 발생 (리포트/차트/엑셀 수치 일치)
+    """테스트/검증 전용 Mock Data (명시적 호출 시에만 사용)"""
+    random.seed(42)
     rows = []
     dates = [f"2026-08-{d:02d}" for d in range(1, 15)]
     sentiments = ["positive", "neutral", "negative"]
@@ -207,11 +211,15 @@ def plot_rating_sentiment_matrix(df: pd.DataFrame, output_dir: str) -> str:
     return save_path
 
 
-def build_charts(db_path: str, output_dir: str = "output") -> list[str]:
-    """메인 진입점"""
+def build_charts(db_path: str, output_dir: str = "output", use_mock: bool = False) -> list[str]:
+    """메인 진입점: 데이터가 없으면 차트 생성을 생략하고 빈 리스트 반환"""
     setup_korean_font()
     os.makedirs(output_dir, exist_ok=True)
-    df = fetch_dataframe_for_chart(db_path)
+    df = fetch_dataframe_for_chart(db_path, use_mock=use_mock)
+
+    if df.empty:
+        print("[안내] 분석된 리뷰 데이터가 없어 차트 생성을 건너뜁니다.")
+        return []
 
     return [
         plot_sentiment_distribution(df, output_dir),

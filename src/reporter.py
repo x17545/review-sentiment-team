@@ -11,21 +11,35 @@ from typing import Optional
 
 
 def calculate_metrics(df: pd.DataFrame) -> dict:
-    """비즈니스 핵심 품질 지표 계산 (긍정/중립/부정 비율 완전 분할)"""
+    """비즈니스 핵심 품질 지표 계산 (데이터가 없을 경우 0 처리)"""
     total = len(df)
+    if total == 0:
+        return {
+            "total": 0,
+            "pos_cnt": 0,
+            "neu_cnt": 0,
+            "neg_cnt": 0,
+            "pos_ratio": 0.0,
+            "neu_ratio": 0.0,
+            "neg_ratio": 0.0,
+            "avg_rating": 0.0,
+            "avg_score": 0.0,
+            "mismatch_rate": 0.0,
+        }
+
     pos_cnt = (df["sentiment"] == "positive").sum()
     neu_cnt = (df["sentiment"] == "neutral").sum()
     neg_cnt = (df["sentiment"] == "negative").sum()
 
-    pos_ratio = (pos_cnt / total * 100) if total > 0 else 0.0
-    neu_ratio = (neu_cnt / total * 100) if total > 0 else 0.0
-    neg_ratio = (neg_cnt / total * 100) if total > 0 else 0.0
+    pos_ratio = (pos_cnt / total * 100)
+    neu_ratio = (neu_cnt / total * 100)
+    neg_ratio = (neg_cnt / total * 100)
 
     mismatch = df[
         ((df["rating"] >= 4) & (df["sentiment"] == "negative")) |
         ((df["rating"] <= 2) & (df["sentiment"] == "positive"))
     ].shape[0]
-    mismatch_rate = (mismatch / total * 100) if total > 0 else 0.0
+    mismatch_rate = (mismatch / total * 100)
 
     return {
         "total": total,
@@ -35,8 +49,8 @@ def calculate_metrics(df: pd.DataFrame) -> dict:
         "pos_ratio": pos_ratio,
         "neu_ratio": neu_ratio,
         "neg_ratio": neg_ratio,
-        "avg_rating": df["rating"].mean() if ("rating" in df.columns and total > 0) else 0.0,
-        "avg_score": df["confidence"].mean() if ("confidence" in df.columns and total > 0) else 0.0,
+        "avg_rating": df["rating"].mean() if "rating" in df.columns else 0.0,
+        "avg_score": df["confidence"].mean() if "confidence" in df.columns else 0.0,
         "mismatch_rate": mismatch_rate,
     }
 
@@ -72,20 +86,43 @@ def fetch_extraction_data(db_path: str) -> dict:
     }
 
 
-def build_report(db_path: str, output_dir: str = "output", chart_paths: list[str] = None) -> str:
-    """대시보드 리포트 텍스트 생성기"""
+def build_report(
+    db_path: str,
+    output_dir: str = "output",
+    chart_paths: list[str] = None,
+    use_mock: bool = False
+) -> str:
+    """대시보드 리포트 텍스트 생성기 (데이터 유무에 따른 분기 처리)"""
     os.makedirs(output_dir, exist_ok=True)
     
     from src.visualizer import fetch_dataframe_for_chart
-    df = fetch_dataframe_for_chart(db_path)
-    metrics = calculate_metrics(df)
+    df = fetch_dataframe_for_chart(db_path, use_mock=use_mock)
     ai_data = fetch_extraction_data(db_path)
-
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    date_min = df["review_date"].min() if "review_date" in df.columns and not df.empty else "N/A"
-    date_max = df["review_date"].max() if "review_date" in df.columns and not df.empty else "N/A"
 
-    report = f"""============================================================
+    if df.empty:
+        report = f"""============================================================
+         고객 리뷰 감정 분석 대시보드
+         생성일시: {now_str}
+         분석 기간: 데이터 없음
+============================================================
+
+[핵심 지표]
+(분석된 리뷰 데이터가 없습니다. 파이프라인을 먼저 실행해 주세요.)
+
+[AI 인사이트 요약]
+{ai_data['summary']}
+
+[생성된 차트 파일]
+(분석 데이터가 없어 차트가 생성되지 않았습니다)
+============================================================
+"""
+    else:
+        metrics = calculate_metrics(df)
+        date_min = df["review_date"].min() if "review_date" in df.columns else "N/A"
+        date_max = df["review_date"].max() if "review_date" in df.columns else "N/A"
+
+        report = f"""============================================================
          고객 리뷰 감정 분석 대시보드
          생성일시: {now_str}
          분석 기간: {date_min} ~ {date_max}
@@ -104,26 +141,26 @@ def build_report(db_path: str, output_dir: str = "output", chart_paths: list[str
 
 [TOP 5 긍정 키워드]
 """
-    if ai_data["pos_keywords"]:
-        for i, item in enumerate(ai_data["pos_keywords"][:5], 1):
-            if isinstance(item, (list, tuple)) and len(item) >= 2:
-                report += f"{i}. {item[0]} ({item[1]}회)\n"
-            else:
-                report += f"{i}. {item}\n"
-    else:
-        report += "(추출된 긍정 키워드가 없습니다)\n"
+        if ai_data["pos_keywords"]:
+            for i, item in enumerate(ai_data["pos_keywords"][:5], 1):
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    report += f"{i}. {item[0]} ({item[1]}회)\n"
+                else:
+                    report += f"{i}. {item}\n"
+        else:
+            report += "(추출된 긍정 키워드가 없습니다)\n"
 
-    report += "\n[TOP 5 부정 키워드]\n"
-    if ai_data["neg_keywords"]:
-        for i, item in enumerate(ai_data["neg_keywords"][:5], 1):
-            if isinstance(item, (list, tuple)) and len(item) >= 2:
-                report += f"{i}. {item[0]} ({item[1]}회)\n"
-            else:
-                report += f"{i}. {item}\n"
-    else:
-        report += "(추출된 부정 키워드가 없습니다)\n"
+        report += "\n[TOP 5 부정 키워드]\n"
+        if ai_data["neg_keywords"]:
+            for i, item in enumerate(ai_data["neg_keywords"][:5], 1):
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    report += f"{i}. {item[0]} ({item[1]}회)\n"
+                else:
+                    report += f"{i}. {item}\n"
+        else:
+            report += "(추출된 부정 키워드가 없습니다)\n"
 
-    report += f"""
+        report += f"""
 [AI 인사이트 요약]
 {ai_data['summary']}
 
@@ -132,11 +169,13 @@ def build_report(db_path: str, output_dir: str = "output", chart_paths: list[str
 
 [생성된 차트 파일]
 """
-    if chart_paths:
-        for p in chart_paths:
-            report += f"- {p}\n"
+        if chart_paths:
+            for p in chart_paths:
+                report += f"- {p}\n"
+        else:
+            report += "(생성된 차트 파일 없음)\n"
 
-    report += "============================================================\n"
+        report += "============================================================\n"
 
     print(report)
 
@@ -152,39 +191,45 @@ def export(
     format: str,
     sentiment: Optional[str] = None,
     rating_min: Optional[int] = None,
-    output: str = "output"
+    output: str = "output",
+    use_mock: bool = False
 ) -> str:
-    """내보내기 함수"""
+    """내보내기 함수 (데이터가 없으면 Mock을 자동 주입하지 않고 안내 후 빈 파일 생성)"""
     os.makedirs(output, exist_ok=True)
     
-    df = pd.DataFrame()
-    try:
-        from src.repository import get_connection
-        with get_connection(db_path) as conn:
-            query = """
-                SELECT 
-                    c.id,
-                    c.cleaned_text,
-                    c.rating,
-                    c.review_date,
-                    c.product_name,
-                    a.sentiment,
-                    a.confidence
-                FROM clean_reviews c
-                JOIN analysis_results a ON c.id = a.review_id
-            """
-            df = pd.read_sql_query(query, conn)
-    except Exception:
-        pass
+    if use_mock:
+        from src.visualizer import fetch_dataframe_for_chart
+        df = fetch_dataframe_for_chart(db_path, use_mock=True)
+    else:
+        df = pd.DataFrame()
+        try:
+            from src.repository import get_connection
+            with get_connection(db_path) as conn:
+                query = """
+                    SELECT 
+                        c.id,
+                        c.cleaned_text,
+                        c.rating,
+                        c.review_date,
+                        c.product_name,
+                        a.sentiment,
+                        a.confidence
+                    FROM clean_reviews c
+                    JOIN analysis_results a ON c.id = a.review_id
+                """
+                df = pd.read_sql_query(query, conn)
+        except Exception:
+            pass
 
     if df.empty:
-        from src.visualizer import fetch_dataframe_for_chart
-        df = fetch_dataframe_for_chart(db_path)
-
-    if sentiment and "sentiment" in df.columns:
-        df = df[df["sentiment"] == sentiment]
-    if rating_min is not None and "rating" in df.columns:
-        df = df[df["rating"] >= rating_min]
+        print("[안내] DB에 내보낼 분석 데이터가 없습니다. 빈 템플릿으로 저장합니다.")
+        columns = ["id", "cleaned_text", "rating", "review_date", "product_name", "sentiment", "confidence"]
+        df = pd.DataFrame(columns=columns)
+    else:
+        if sentiment and "sentiment" in df.columns:
+            df = df[df["sentiment"] == sentiment]
+        if rating_min is not None and "rating" in df.columns:
+            df = df[df["rating"] >= rating_min]
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     file_ext = "xlsx" if format == "excel" else format
