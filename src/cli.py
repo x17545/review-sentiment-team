@@ -365,16 +365,21 @@ def cmd_analyze(args: argparse.Namespace, config: dict[str, Any]) -> None:
     print(f"[analyze] db={args.db}, target={target}, limit={args.limit}")
     from src.analyzer import analyze_reviews_from_db
 
-    model_name = config.get("ai", {}).get("model")
+    ai_config = config.get("ai", {})
+
+    model_name = ai_config.get("model")
     if not model_name:
         raise SystemExit("[오류] config.json의 ai.model 설정이 필요합니다.")
-    # [43번] prompt_version도 config에서 읽어 전달. 안 넘기면 저장은 "v1" 고정인데
-    #   조회(list/show/stats)는 config 기준이라 재현성 기준이 어긋난다.
-    prompt_version = config.get("ai", {}).get("prompt_version", "v1")
+
+    prompt_version = ai_config.get("prompt_version", "v1")
 
     results = analyze_reviews_from_db(
         db_path=args.db,
         model_name=model_name,
+        api_key_env=ai_config["api_key_env"],
+        base_url=ai_config["base_url"],
+        timeout=ai_config["timeout"],
+        retry=ai_config["retry"],
         prompt_version=prompt_version,
         review_id=args.id,
         analyze_all=args.all,
@@ -414,15 +419,21 @@ def cmd_extract(args: argparse.Namespace, config: dict[str, Any]) -> None:
     )
     from src.analyzer import extract_insights_from_db
 
-    model_name = config.get("ai", {}).get("model")
+    ai_config = config.get("ai", {})
+
+    model_name = ai_config.get("model")
     if not model_name:
         raise SystemExit("[오류] config.json의 ai.model 설정이 필요합니다.")
-    # [44번] extract도 prompt_version을 전달해 저장 기준을 조회와 일치시킨다.
-    prompt_version = config.get("ai", {}).get("prompt_version", "v1")
+
+    prompt_version = ai_config.get("prompt_version", "v1")
 
     result = extract_insights_from_db(
         db_path=args.db,
         model_name=model_name,
+        api_key_env=ai_config["api_key_env"],
+        base_url=ai_config["base_url"],
+        timeout=ai_config["timeout"],
+        retry=ai_config["retry"],
         prompt_version=prompt_version,
         sentiment=args.sentiment,
         product=args.product,
