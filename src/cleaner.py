@@ -148,6 +148,7 @@ def run(
         get_connection,
         get_raw_reviews_for_cleaning,
         insert_clean_review,
+        mark_raw_processed,
     )
 
     processed = 0
@@ -183,6 +184,8 @@ def run(
                 or len(cleaned["cleaned_text"]) < min_review_length
             ):
                 skipped += 1
+                # [31번] 짧아서 제외한 raw도 '처리 시도 완료'로 표시(재조회 방지)
+                mark_raw_processed(conn, row["id"])
                 continue
 
             cleaned["raw_id"] = row["id"]
@@ -197,6 +200,9 @@ def run(
                 inserted += 1
             else:
                 skipped += 1
+
+            # [31번] 저장이든 중복 skip이든 처리했으므로 표시(무한 재처리 방지)
+            mark_raw_processed(conn, row["id"])
 
     return {
         "processed": processed,

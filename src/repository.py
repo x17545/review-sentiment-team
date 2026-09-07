@@ -71,6 +71,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             raw_date TEXT,
             raw_product TEXT,
 
+            -- [31번 수정] 정제 '시도' 완료 여부. clean_reviews.raw_id 존재로
+            --   추론하면, 중복이라 skip된 raw가 영원히 미정제로 남는다.
+            --   저장이든 skip이든 한 번 처리하면 1로 표시해 재조회에서 제외한다.
+            processed INTEGER NOT NULL DEFAULT 0,
+
             imported_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
         );
         """)
@@ -487,11 +492,11 @@ def get_raw_reviews_for_cleaning(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """
     아직 정제되지 않은 raw_reviews만 조회합니다.
 
-    '정제됨'의 기준: clean_reviews.raw_id 에 해당 raw.id 가 이미 존재하는지.
-    LEFT JOIN 후 매칭이 없는(cr.id IS NULL) raw 행만 남깁니다.
-    이렇게 하면 clean을 여러 번 실행해도 이미 정제한 원본을 다시 처리하지 않습니다.
+    [31번 수정] '정제됨' 판정을 clean_reviews.raw_id 존재가 아니라
+    raw_reviews.processed 플래그로 합니다. 그래야 중복이라 skip된 raw도
+    '처리 시도 완료'로 표시되어 재조회에서 빠집니다(무한 재처리 방지).
 
-    반환 컬럼: id(raw_reviews.id), source_file, raw_text, raw_rating, raw_date, raw_product
+    반환 컬럼: id, source_file, raw_text, raw_rating, raw_date, raw_product
     """
     return conn.execute("""
     SELECT
@@ -502,11 +507,17 @@ def get_raw_reviews_for_cleaning(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         rr.raw_date,
         rr.raw_product
     FROM raw_reviews rr
-    LEFT JOIN clean_reviews cr
-        ON cr.raw_id = rr.id
-    WHERE cr.id IS NULL
+    WHERE rr.processed = 0
     ORDER BY rr.id ASC
     """).fetchall()
+
+
+def mark_raw_processed(conn: sqlite3.Connection, raw_id: int) -> None:
+    """
+    raw 리뷰 1건을 '정제 시도 완료'로 표시합니다.
+    저장(신규)이든 중복 skip이든, cleaner가 한 건 처리를 마치면 호출합니다.
+    """
+    conn.execute("UPDATE raw_reviews SET processed = 1 WHERE id = ?", (raw_id,))
 
 
 def insert_clean_review(
@@ -738,3 +749,156 @@ def get_reviews_for_extraction(
         params.append(limit)
 
     return conn.execute(sql, params).fetchall()
+
+
+# ===========================================================================
+# list / show 조회용 함수 (CLI cmd_list, cmd_show 연결용)
+# ===========================================================================
+
+# --sort 표준값 → 실제 ORDER BY 절 매핑
+_SORT_MAP = {
+    "date_desc": "cr.review_date DESC, cr.id DESC",
+    "date_asc": "cr.review_date ASC, cr.id ASC",
+    "rating_desc": "cr.rating DESC, cr.id DESC",
+    "rating_asc": "cr.rating ASC, cr.id ASC",
+    "id_asc": "cr.id ASC",
+}
+
+
+def list_reviews(
+    conn: sqlite3.Connection,
+    sentiment: Optional[str] = None,
+    rating: Optional[int] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    model_name: Optional[str] = None,
+    prompt_version: str = "v1",
+    sort: str = "date_desc",
+    page: int = 1,
+    size: int = 20,
+) -> dict[str, Any]:
+    """
+    조건별 리뷰 목록을 페이지네이션하여 조회합니다. (CLI list 대응)
+
+    감정(sentiment)은 clean_reviews가 아니라 analysis_results에 있으므로
+    LEFT JOIN으로 붙입니다(분석 안 된 리뷰도 목록에는 나오되 sentiment=NULL).
+    감정 필터를 쓸 때는 model_name을 함께 넘겨 모델 섞임을 방지하세요.
+
+    반환:
+      {
+        "rows": [Row, ...],   # 현재 페이지 항목 (id, cleaned_text, rating,
+                              #                    review_date, product_name, sentiment, confidence)
+        "total": int,         # 필터 적용 후 전체 건수
+        "page": int, "size": int, "total_pages": int
+      }
+    """
+    # [치명 수정] model_name 필수. 없으면 LEFT JOIN이 여러 모델 결과를 모두 붙여
+    #   total과 rows가 중복 부풀림. 감정 컬럼을 보여주려면 모델을 반드시 고정한다.
+    if not model_name:
+        raise ValueError("list_reviews 조회 시 model_name은 필수입니다.")
+    # [권장] repository 함수 자체에도 페이지 방어 (CLI 검증과 별개로 안전망)
+    if page < 1:
+        raise ValueError("page는 1 이상이어야 합니다.")
+    if size < 1:
+        raise ValueError("size는 1 이상이어야 합니다.")
+
+    where: list[str] = []
+    params: list[Any] = []
+
+    # 감정을 보여주기 위한 LEFT JOIN. model_name+prompt_version으로 고정해 중복 방지.
+    join = (
+        "LEFT JOIN analysis_results ar "
+        "ON ar.review_id = cr.id "
+        "AND ar.model_name = ? AND ar.prompt_version = ?"
+    )
+    params.append(model_name)
+    params.append(prompt_version)
+
+    if sentiment is not None:
+        where.append("ar.sentiment = ?")
+        params.append(sentiment)
+    if rating is not None:
+        where.append("cr.rating = ?")
+        params.append(rating)
+    if date_from is not None:
+        where.append("cr.review_date >= ?")
+        params.append(date_from)
+    if date_to is not None:
+        where.append("cr.review_date <= ?")
+        params.append(date_to)
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    order_sql = "ORDER BY " + _SORT_MAP.get(sort, _SORT_MAP["date_desc"])
+
+    # 전체 건수 (페이지 계산용)
+    total = conn.execute(
+        f"SELECT COUNT(*) AS n FROM clean_reviews cr {join} {where_sql}",
+        params,
+    ).fetchone()["n"]
+
+    # 페이지 항목
+    offset = (page - 1) * size
+    rows = conn.execute(
+        f"""
+        SELECT
+            cr.id, cr.cleaned_text, cr.rating, cr.review_date,
+            cr.product_name, ar.sentiment, ar.confidence
+        FROM clean_reviews cr
+        {join}
+        {where_sql}
+        {order_sql}
+        LIMIT ? OFFSET ?
+        """,
+        params + [size, offset],
+    ).fetchall()
+
+    total_pages = (total + size - 1) // size if size > 0 else 1
+    return {
+        "rows": rows,
+        "total": int(total),
+        "page": page,
+        "size": size,
+        "total_pages": max(total_pages, 1),
+    }
+
+
+def get_review_by_id(
+    conn: sqlite3.Connection,
+    review_id: int,
+    model_name: Optional[str] = None,
+    prompt_version: str = "v1",
+) -> Optional[sqlite3.Row]:
+    """
+    특정 리뷰 1건의 상세를 조회합니다. (CLI show 대응)
+
+    원문·별점·날짜·제품명과 함께 감정 분석 결과를 LEFT JOIN으로 붙입니다.
+    model_name을 주면 그 모델의 분석 결과를, 안 주면 아무 분석 결과 하나를 보여줍니다.
+    없는 id면 None을 반환합니다.
+    """
+    join_cond = ["ar.review_id = cr.id"]
+    params: list[Any] = []
+    if model_name is not None:
+        join_cond.append("ar.model_name = ?")
+        params.append(model_name)
+        join_cond.append("ar.prompt_version = ?")
+        params.append(prompt_version)
+    join = "LEFT JOIN analysis_results ar ON " + " AND ".join(join_cond)
+
+    # [권장] model_name 미지정 시 여러 분석 결과 중 아무거나 붙는 비결정성을
+    #   막기 위해 최신 분석 1건으로 한정한다.
+    order_limit = "ORDER BY ar.analyzed_at DESC LIMIT 1" if model_name is None else ""
+
+    params.append(review_id)
+    return conn.execute(
+        f"""
+        SELECT
+            cr.id, cr.cleaned_text, cr.rating, cr.review_date,
+            cr.product_name, cr.source_file, cr.created_at,
+            ar.sentiment, ar.confidence, ar.model_name, ar.analyzed_at
+        FROM clean_reviews cr
+        {join}
+        WHERE cr.id = ?
+        {order_limit}
+        """,
+        params,
+    ).fetchone()
