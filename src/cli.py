@@ -23,6 +23,7 @@ CLI 진입 계층.
 
 import sys
 import json
+import sqlite3
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -364,15 +365,22 @@ def cmd_analyze(args: argparse.Namespace, config: dict[str, Any]) -> None:
     print(f"[analyze] db={args.db}, target={target}, limit={args.limit}")
     from src.analyzer import analyze_reviews_from_db
 
-    ai_config = config["ai"]
+    ai_config = config.get("ai", {})
+
+    model_name = ai_config.get("model")
+    if not model_name:
+        raise SystemExit("[오류] config.json의 ai.model 설정이 필요합니다.")
+
+    prompt_version = ai_config.get("prompt_version", "v1")
 
     results = analyze_reviews_from_db(
         db_path=args.db,
-        model_name=ai_config["model"],
+        model_name=model_name,
         api_key_env=ai_config["api_key_env"],
         base_url=ai_config["base_url"],
         timeout=ai_config["timeout"],
         retry=ai_config["retry"],
+        prompt_version=prompt_version,
         review_id=args.id,
         analyze_all=args.all,
         limit=args.limit,
@@ -411,15 +419,22 @@ def cmd_extract(args: argparse.Namespace, config: dict[str, Any]) -> None:
     )
     from src.analyzer import extract_insights_from_db
 
-    ai_config = config["ai"]
+    ai_config = config.get("ai", {})
+
+    model_name = ai_config.get("model")
+    if not model_name:
+        raise SystemExit("[오류] config.json의 ai.model 설정이 필요합니다.")
+
+    prompt_version = ai_config.get("prompt_version", "v1")
 
     result = extract_insights_from_db(
         db_path=args.db,
-        model_name=ai_config["model"],
+        model_name=model_name,
         api_key_env=ai_config["api_key_env"],
         base_url=ai_config["base_url"],
         timeout=ai_config["timeout"],
         retry=ai_config["retry"],
+        prompt_version=prompt_version,
         sentiment=args.sentiment,
         product=args.product,
         date_from=args.date_from,
@@ -444,35 +459,132 @@ def cmd_extract(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
 def cmd_list(args: argparse.Namespace, config: dict[str, Any]) -> None:
     validate_date_range(args.date_from, args.date_to)
-    print(
-        f"[list] db={args.db}, sentiment={args.sentiment}, rating={args.rating}, "
-        f"date_from={args.date_from}, date_to={args.date_to}, "
-        f"page={args.page}, size={args.size}, sort={args.sort}"
-    )
-    # TODO: rows = repository.list_reviews(...); 출력 포맷은 여기(또는 reporter)에서
+    from src.repository import get_connection, list_reviews
+
+    # [치명 수정] 감정 필터 유무와 무관하게 model_name을 항상 고정한다.
+    #   그래야 LEFT JOIN이 한 리뷰당 한 모델 결과만 붙여 중복이 없다.
+    model_name = config.get("ai", {}).get("model")
+    if not model_name:
+        raise SystemExit("[오류] config.json의 ai.model 설정이 필요합니다.")
+    prompt_version = config.get("ai", {}).get("prompt_version", "v1")
+
+    with get_connection(args.db) as conn:
+        result = list_reviews(
+            conn,
+            sentiment=args.sentiment,
+            rating=args.rating,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            model_name=model_name,
+            prompt_version=prompt_version,
+            sort=args.sort,
+            page=args.page,
+            size=args.size,
+        )
+
+    rows = result["rows"]
+    print(f"=== 리뷰 목록 ({result['page']}/{result['total_pages']} 페이지, "
+          f"총 {result['total']}건) ===")
+    if not rows:
+        print("(조건에 맞는 리뷰가 없습니다)")
+        return
+    for r in rows:
+        sentiment = r["sentiment"] or "-"
+        rating = f"{r['rating']:.0f}" if r["rating"] is not None else "-"
+        text = (r["cleaned_text"] or "")[:30]
+        print(f"[{r['id']}] ★{rating} | {r['review_date'] or '-'} | "
+              f"{text} | {sentiment}")
 
 
 def cmd_show(args: argparse.Namespace, config: dict[str, Any]) -> None:
-    print(f"[show] db={args.db}, id={args.id}")
-    # TODO: row = repository.get_review_by_id(conn, args.id)
+    from src.repository import get_connection, get_review_by_id
+
+    model_name = config.get("ai", {}).get("model")
+    prompt_version = config.get("ai", {}).get("prompt_version", "v1")
+
+    with get_connection(args.db) as conn:
+        row = get_review_by_id(conn, args.id,
+                               model_name=model_name, prompt_version=prompt_version)
+
+    if row is None:
+        print(f"id={args.id} 리뷰를 찾을 수 없습니다.")
+        return
+
+    print(f"=== 리뷰 상세 (id={row['id']}) ===")
+    print(f"정제문    : {row['cleaned_text']}")
+    print(f"별점      : {row['rating'] if row['rating'] is not None else '-'}")
+    print(f"작성일    : {row['review_date'] or '-'}")
+    print(f"제품명    : {row['product_name'] or '-'}")
+    print(f"출처파일  : {row['source_file'] or '-'}")
+    print(f"감정      : {row['sentiment'] or '(미분석)'}", end="")
+    if row["sentiment"] is not None:
+        # [치명 수정] sentiment는 있는데 confidence가 NULL이면 :.2f에서 예외.
+        conf = f"{row['confidence']:.2f}" if row["confidence"] is not None else "-"
+        print(f" (신뢰도 {conf}, 모델 {row['model_name']})")
+    else:
+        print()
 
 
 def cmd_stats(args: argparse.Namespace, config: dict[str, Any]) -> None:
-    print(f"[stats] db={args.db}, product={args.product}")
-    # TODO: repository.get_review_count(...), get_sentiment_stats(...)
+    # [권장] --product는 아직 미구현이라 사용 시 명확히 차단
+    if getattr(args, "product", None):
+        raise SystemExit("[오류] stats --product는 아직 지원하지 않습니다.")
+
+    from src.repository import get_connection, get_review_count, get_sentiment_stats
+
+    model_name = config.get("ai", {}).get("model", "")
+    prompt_version = config.get("ai", {}).get("prompt_version", "v1")
+
+    with get_connection(args.db) as conn:
+        counts = get_review_count(conn)
+        sentiments = get_sentiment_stats(conn, model_name=model_name,
+                                         prompt_version=prompt_version)
+
+    print("=== 리뷰 분석 통계 ===")
+    print(f"원본(raw)   : {counts['raw_reviews']}건")
+    print(f"정제(clean) : {counts['clean_reviews']}건")
+    print(f"분석 완료   : {counts['analysis_results']}건")
+    print(f"추출 결과   : {counts['extraction_results']}건")
+
+    # [치명 수정] 비율 분모는 전체 analysis_results가 아니라 '이 모델'의 감정 합계.
+    #   전체로 나누면 다른 모델 결과가 섞여 비율이 틀린다.
+    model_analyzed = sum(int(s["count"]) for s in sentiments)
+    print(f"\n[감정 분포] (모델: {model_name or '미지정'})")
+    if model_analyzed == 0:
+        print("- (분석 데이터 없음)")
+    else:
+        for s in sentiments:
+            ratio = s["count"] / model_analyzed * 100
+            print(f"- {s['sentiment']}: {s['count']}건 ({ratio:.1f}%)")
 
 
 def cmd_dashboard(args: argparse.Namespace, config: dict[str, Any]) -> None:
-    print(f"[dashboard] db={args.db}, output={args.output}")
-    # TODO: visualizer.build_charts(...) + reporter.build_report(...)
+    from src.visualizer import build_charts
+    from src.reporter import build_report
+
+    # 1) 차트 생성 (데이터 없으면 build_charts가 빈 리스트 반환)
+    chart_paths = build_charts(args.db, output_dir=args.output)
+    # 2) 차트 경로를 넘겨 종합 리포트 생성
+    report_path = build_report(args.db, output_dir=args.output,
+                               chart_paths=chart_paths)
+    print(f"\n리포트 저장: {report_path}")
+    if chart_paths:
+        print("차트 저장:")
+        for p in chart_paths:
+            print(f"  - {p}")
 
 
 def cmd_export(args: argparse.Namespace, config: dict[str, Any]) -> None:
-    print(
-        f"[export] db={args.db}, format={args.format}, sentiment={args.sentiment}, "
-        f"rating_min={args.rating_min}, output={args.output}"
+    from src.reporter import export
+
+    export_path = export(
+        db_path=args.db,
+        format=args.format,
+        sentiment=args.sentiment,
+        rating_min=args.rating_min,
+        output=args.output,
     )
-    # TODO: reporter.export(format=args.format, filters=...)
+    print(f"\n내보내기 저장: {export_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -755,6 +867,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 130
     except FileNotFoundError as e:
         eprint(f"[오류] 파일을 찾을 수 없습니다: {e}")
+        return 1
+    # [15번] 아래 예외들도 traceback 대신 사용자용 메시지로 정리.
+    except ValueError as e:
+        eprint(f"[오류] 잘못된 입력/값입니다: {e}")
+        return 1
+    except sqlite3.Error as e:
+        eprint(f"[오류] 데이터베이스 오류: {e}")
+        return 1
+    except Exception as e:
+        # 예상 못 한 오류도 최소한 한 줄로. (--verbose면 traceback을 보고 싶을 수 있어 안내)
+        eprint(f"[오류] 예기치 못한 오류: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
         return 1
 
 
