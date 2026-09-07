@@ -1,7 +1,8 @@
 {
   "ai": {
     "api_key_env": "OPENAI_API_KEY",
-    "model": "gpt-4o-mini",
+    "base_url": "https://copa.codyssey.kr/v1",
+    "model": "gpt-5-mini",
     "timeout": 30,
     "retry": 2
   },

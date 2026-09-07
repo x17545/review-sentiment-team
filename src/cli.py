@@ -364,11 +364,15 @@ def cmd_analyze(args: argparse.Namespace, config: dict[str, Any]) -> None:
     print(f"[analyze] db={args.db}, target={target}, limit={args.limit}")
     from src.analyzer import analyze_reviews_from_db
 
-    model_name = config["ai"]["model"]
+    ai_config = config["ai"]
 
     results = analyze_reviews_from_db(
         db_path=args.db,
-        model_name=model_name,
+        model_name=ai_config["model"],
+        api_key_env=ai_config["api_key_env"],
+        base_url=ai_config["base_url"],
+        timeout=ai_config["timeout"],
+        retry=ai_config["retry"],
         review_id=args.id,
         analyze_all=args.all,
         limit=args.limit,
@@ -407,11 +411,15 @@ def cmd_extract(args: argparse.Namespace, config: dict[str, Any]) -> None:
     )
     from src.analyzer import extract_insights_from_db
 
-    model_name = config["ai"]["model"]
+    ai_config = config["ai"]
 
     result = extract_insights_from_db(
         db_path=args.db,
-        model_name=model_name,
+        model_name=ai_config["model"],
+        api_key_env=ai_config["api_key_env"],
+        base_url=ai_config["base_url"],
+        timeout=ai_config["timeout"],
+        retry=ai_config["retry"],
         sentiment=args.sentiment,
         product=args.product,
         date_from=args.date_from,
