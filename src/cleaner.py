@@ -153,6 +153,7 @@ def run(
 
     processed = 0
     inserted = 0
+    updated = 0
     skipped = 0
 
     min_review_length = config.get(
@@ -198,6 +199,8 @@ def run(
 
             if result["inserted"]:
                 inserted += 1
+            elif result["duplicate"] and dedup_policy == "upsert":
+                updated += 1
             else:
                 skipped += 1
 
@@ -207,5 +210,6 @@ def run(
     return {
         "processed": processed,
         "inserted": inserted,
+        "updated": updated,
         "skipped": skipped,
     }
