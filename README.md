@@ -680,3 +680,53 @@ export
 - `.env` 파일은 Git 저장소에 커밋하지 않습니다.
 - API 키를 소스 코드나 README에 직접 작성하지 않습니다.
 - 공유가 필요한 경우 `.env.example`을 사용합니다.
+
+---
+
+## 21. 보너스 기능
+
+### 21.1 다국어 감정 분석
+
+기본 한국어 리뷰 감정 분석 기능을 확장하여 영어 리뷰도 감정 분석할 수 있도록 구현했습니다.
+
+AI 감정 분석 프롬프트에서 한국어, 영어 및 두 언어가 혼합된 리뷰를 처리할 수 있도록 명시했으며,
+입력 언어와 관계없이 기존과 동일한 형식으로 분석 결과를 반환합니다.
+
+```text
+sentiment: positive | neutral | negative
+confidence: 0.0 ~ 1.0
+```
+
+따라서 기존 데이터베이스 구조와 CLI 분석 흐름을 변경하지 않고 다국어 리뷰를 처리할 수 있습니다.
+
+#### 지원 및 테스트 범위
+
+| 테스트 리뷰 | 분석 결과 | 신뢰도 | 결과 |
+| --- | --- | ---: | :---: |
+| 한국어 긍정 리뷰 | positive | 0.98 | ✅ |
+| 영어 긍정 리뷰 | positive | 0.98 | ✅ |
+| 영어 부정 리뷰 | negative | 0.98 | ✅ |
+| 영어 중립 리뷰 | neutral | 0.95 | ✅ |
+| 한국어 + 영어 혼합 리뷰 | positive | 0.95 | ✅ |
+
+실제 AI API를 호출하여 위 테스트를 수행했으며,
+기존 한국어 감정 분석 기능이 정상적으로 유지되는 것도 함께 확인했습니다.
+
+예시 영어 리뷰:
+
+```text
+The product quality is excellent and I am very satisfied with my purchase.
+```
+
+분석 결과 예시:
+
+```text
+sentiment: positive
+confidence: 0.98
+```
+
+다국어 리뷰 역시 기존과 동일하게 `analyze` 명령을 통해 분석할 수 있습니다.
+
+```powershell
+python main.py analyze --db data/reviews.db --unanalyzed
+```
