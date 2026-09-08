@@ -1,5 +1,6 @@
 .env
 data/raw/*.csv
+!data/raw/sample_reviews.csv
 data/clean/*.csv
 data/*.db
 data/*.db-wal

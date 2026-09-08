@@ -25,6 +25,7 @@ import sys
 import json
 import sqlite3
 import argparse
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Callable, Any
@@ -35,7 +36,21 @@ DEFAULT_CONFIG_PATH = "config.json"
 DEFAULT_OUTPUT_DIR = "output"
 
 MAX_PAGE_SIZE = 100                      # --size 상한
-VALID_DEDUP_POLICIES = ("skip",)        # 현재 실행 가능한 중복 정책 (upsert는 미구현)
+VALID_DEDUP_POLICIES = ("skip", "upsert")   # 지원 중복 정책
+
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / "app.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +364,7 @@ def cmd_clean(args: argparse.Namespace, config: dict[str, Any]) -> None:
         f"정제 완료: "
         f"처리 {result['processed']}건, "
         f"저장 {result['inserted']}건, "
+        f"갱신 {result['updated']}건, "
         f"제외 {result['skipped']}건"
     )
 
@@ -395,6 +411,15 @@ def cmd_analyze(args: argparse.Namespace, config: dict[str, Any]) -> None:
         if result.get("status") == "success"
     )
     failed_count = len(results) - success_count
+
+    for result in results:
+        if result.get("status") == "failed":
+            logger.error(
+                "AI 분석 실패: review_id=%s, error=%s",
+                result.get("review_id", "unknown"),
+                result.get("error", "알 수 없는 오류"),
+            )
+
     inserted_count = sum(
         1 for result in results
         if result.get("inserted") is True
@@ -486,6 +511,13 @@ def cmd_list(args: argparse.Namespace, config: dict[str, Any]) -> None:
     print(f"=== 리뷰 목록 ({result['page']}/{result['total_pages']} 페이지, "
           f"총 {result['total']}건) ===")
     if not rows:
+        logger.warning(
+        "조건에 맞는 리뷰가 없습니다: sentiment=%s, rating=%s, date_from=%s, date_to=%s",
+        args.sentiment,
+        args.rating,
+        args.date_from,
+        args.date_to,
+        )
         print("(조건에 맞는 리뷰가 없습니다)")
         return
     for r in rows:
@@ -528,6 +560,7 @@ def cmd_show(args: argparse.Namespace, config: dict[str, Any]) -> None:
 def cmd_stats(args: argparse.Namespace, config: dict[str, Any]) -> None:
     # [권장] --product는 아직 미구현이라 사용 시 명확히 차단
     if getattr(args, "product", None):
+        logger.error("지원하지 않는 옵션 사용: stats --product=%s", args.product)
         raise SystemExit("[오류] stats --product는 아직 지원하지 않습니다.")
 
     from src.repository import get_connection, get_review_count, get_sentiment_stats
@@ -537,14 +570,27 @@ def cmd_stats(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
     with get_connection(args.db) as conn:
         counts = get_review_count(conn)
-        sentiments = get_sentiment_stats(conn, model_name=model_name,
-                                         prompt_version=prompt_version)
+        sentiments = get_sentiment_stats(
+            conn,
+            model_name=model_name,
+            prompt_version=prompt_version,
+        )
+        avg_rating_row = conn.execute(
+            "SELECT AVG(rating) AS avg_rating FROM clean_reviews "
+            "WHERE rating IS NOT NULL"
+        ).fetchone()
+        avg_rating = (
+            float(avg_rating_row["avg_rating"])
+            if avg_rating_row["avg_rating"] is not None
+            else 0.0
+        )
 
     print("=== 리뷰 분석 통계 ===")
     print(f"원본(raw)   : {counts['raw_reviews']}건")
     print(f"정제(clean) : {counts['clean_reviews']}건")
     print(f"분석 완료   : {counts['analysis_results']}건")
     print(f"추출 결과   : {counts['extraction_results']}건")
+    print(f"평균 별점   : {avg_rating:.2f}점")
 
     # [치명 수정] 비율 분모는 전체 analysis_results가 아니라 '이 모델'의 감정 합계.
     #   전체로 나누면 다른 모델 결과가 섞여 비율이 틀린다.
@@ -562,8 +608,15 @@ def cmd_dashboard(args: argparse.Namespace, config: dict[str, Any]) -> None:
     from src.visualizer import build_charts
     from src.reporter import build_report
 
+
+    visualization_config = config.get("visualization", {})
+    dpi = visualization_config.get("dpi", 300)
     # 1) 차트 생성 (데이터 없으면 build_charts가 빈 리스트 반환)
-    chart_paths = build_charts(args.db, output_dir=args.output)
+    chart_paths = build_charts(
+        args.db,
+        output_dir=args.output,
+        dpi=dpi,
+    )
     # 2) 차트 경로를 넘겨 종합 리포트 생성
     report_path = build_report(args.db, output_dir=args.output,
                                chart_paths=chart_paths)
@@ -616,7 +669,7 @@ def build_parser() -> argparse.ArgumentParser:
     # clean
     p = sub.add_parser("clean", parents=[parent], help="raw -> clean 정제")
     p.add_argument("--dedup-policy", choices=["skip", "upsert"], default=None,
-                   help="중복 처리 정책 (미지정 시 config 값). 현재 실행은 skip만 지원")
+                   help="중복 처리 정책 (미지정 시 config 값)")
     p.set_defaults(func=cmd_clean)
 
     # analyze
@@ -857,25 +910,33 @@ def main(argv: Optional[list[str]] = None) -> int:
     initialize_database(args.db, verbose=args.verbose)
 
     try:
+        logger.info("명령 실행 시작: %s", args.command)
         args.func(args, config)
+        logger.info("명령 실행 완료: %s", args.command)
         return 0
     except UserAbort as e:
+        logger.warning("사용자 중단: %s", e)
         eprint(f"\n중단됨: {e}")
         return 130                      # SIGINT 관례 종료코드
     except KeyboardInterrupt:
+        logger.warning("사용자가 Ctrl+C로 실행을 중단했습니다.")
         eprint("\n중단됨 (Ctrl+C)")
         return 130
     except FileNotFoundError as e:
+        logger.error("파일을 찾을 수 없습니다: %s", e)
         eprint(f"[오류] 파일을 찾을 수 없습니다: {e}")
         return 1
     # [15번] 아래 예외들도 traceback 대신 사용자용 메시지로 정리.
     except ValueError as e:
+        logger.error("잘못된 입력/값: %s", e)
         eprint(f"[오류] 잘못된 입력/값입니다: {e}")
         return 1
     except sqlite3.Error as e:
+        logger.error("데이터베이스 오류: %s", e)
         eprint(f"[오류] 데이터베이스 오류: {e}")
         return 1
     except Exception as e:
+        logger.exception("예기치 못한 오류가 발생했습니다.")
         # 예상 못 한 오류도 최소한 한 줄로. (--verbose면 traceback을 보고 싶을 수 있어 안내)
         eprint(f"[오류] 예기치 못한 오류: {e}")
         if args.verbose:

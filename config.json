@@ -20,5 +20,8 @@
     "raw": "data/raw",
     "clean": "data/clean",
     "output": "output"
+  },
+  "visualization": {
+    "dpi": 300
   }
 }

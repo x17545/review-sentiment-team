@@ -88,7 +88,11 @@ def _make_mock_data() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def plot_sentiment_distribution(df: pd.DataFrame, output_dir: str) -> str:
+def plot_sentiment_distribution(
+    df: pd.DataFrame,
+    output_dir: str,
+    dpi: int = 300,
+) -> str:
     """1. 감정 분포 도넛 차트"""
     save_path = os.path.join(output_dir, "sentiment_distribution.png")
     
@@ -111,12 +115,16 @@ def plot_sentiment_distribution(df: pd.DataFrame, output_dir: str) -> str:
     )
     plt.title("고객 리뷰 감정 분포 (Sentiment Distribution)", fontsize=13, pad=15, weight="bold")
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
+    plt.savefig(save_path, dpi=dpi)
     plt.close()
     return save_path
 
 
-def plot_sentiment_trend(df: pd.DataFrame, output_dir: str) -> str:
+def plot_sentiment_trend(
+    df: pd.DataFrame,
+    output_dir: str,
+    dpi: int = 300,
+) -> str:
     """2. 시간별 감정 변화 추이 꺾은선 차트"""
     save_path = os.path.join(output_dir, "sentiment_trend.png")
     temp_df = df.copy()
@@ -164,12 +172,16 @@ def plot_sentiment_trend(df: pd.DataFrame, output_dir: str) -> str:
     plt.grid(True, linestyle="--", alpha=0.5)
     plt.legend(title="Sentiment")
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
+    plt.savefig(save_path, dpi=dpi)
     plt.close()
     return save_path
 
 
-def plot_rating_sentiment_matrix(df: pd.DataFrame, output_dir: str) -> str:
+def plot_rating_sentiment_matrix(
+    df: pd.DataFrame,
+    output_dir: str,
+    dpi: int = 300,
+) -> str:
     """3. 별점별 감정 분포 누적 막대 차트"""
     save_path = os.path.join(output_dir, "rating_sentiment_matrix.png")
     
@@ -206,12 +218,17 @@ def plot_rating_sentiment_matrix(df: pd.DataFrame, output_dir: str) -> str:
     plt.grid(axis="y", linestyle="--", alpha=0.5)
     plt.legend(title="Sentiment")
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
+    plt.savefig(save_path, dpi=dpi)
     plt.close()
     return save_path
 
 
-def build_charts(db_path: str, output_dir: str = "output", use_mock: bool = False) -> list[str]:
+def build_charts(
+    db_path: str,
+    output_dir: str = "output",
+    use_mock: bool = False,
+    dpi: int = 300,
+) -> list[str]:
     """메인 진입점: 데이터가 없으면 차트 생성을 생략하고 빈 리스트 반환"""
     setup_korean_font()
     os.makedirs(output_dir, exist_ok=True)
@@ -223,6 +240,6 @@ def build_charts(db_path: str, output_dir: str = "output", use_mock: bool = Fals
 
     return [
         plot_sentiment_distribution(df, output_dir),
-        plot_sentiment_trend(df, output_dir),
-        plot_rating_sentiment_matrix(df, output_dir),
+        plot_sentiment_trend(df, output_dir, dpi=dpi),
+        plot_rating_sentiment_matrix(df, output_dir, dpi=dpi),
     ]
