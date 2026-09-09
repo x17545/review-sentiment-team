@@ -26,14 +26,15 @@ AI 기반 고객 리뷰 감정 분석 대시보드 (Project C)
   - 빈출 칭찬/불만 사항
   - 전체 리뷰 요약
   - 개선 제안
-  - 감정별 리뷰 분석
-  - 기간별 리뷰 분석
-  - 제품별 리뷰 분석
-  - 감정 분석 통계 조회
-  - matplotlib 기반 시각화
-  - 텍스트 대시보드 리포트 생성
-  - CSV / Excel 결과 내보내기
-  - 대화형 모드 및 일반 CLI 지원
+- 감정별 / 기간별 / 제품별 리뷰 분석
+- 리뷰 및 감정 분석 통계 조회
+- 제품/카테고리별 비교 분석
+- 부정 감정 급증 알림
+- matplotlib 기반 차트 생성
+- 텍스트 대시보드 리포트 생성
+- HTML 대시보드 생성
+- CSV / JSONL / Excel 결과 내보내기
+- 대화형 모드 및 일반 CLI 지원
 
 ---
 
@@ -50,12 +51,10 @@ review-sentiment/
 │
 ├── data/
 │   ├── raw/
+│   │   ├── .gitkeep
 │   │   └── sample_reviews.csv
-│   ├── clean/
-│   └── reviews.db
-│
-├── logs/
-├── output/
+│   └── clean/
+│       └── .gitkeep
 │
 └── src/
     ├── __init__.py
@@ -66,8 +65,29 @@ review-sentiment/
     ├── ai_client.py
     ├── analyzer.py
     ├── visualizer.py
-    └── reporter.py
+    ├── reporter.py
+    ├── comparison.py
+    └── alert.py
 ```
+
+실행 과정에서 다음 파일 및 폴더가 생성될 수 있습니다.
+
+```text
+data/reviews.db
+logs/app.log
+output/
+├── dashboard/
+│   ├── dashboard_report.txt
+│   ├── dashboard.html
+│   ├── sentiment_distribution.png
+│   ├── sentiment_trend.png
+│   └── rating_sentiment_matrix.png
+└── export/
+    ├── reviews_export.csv
+    ├── reviews_export.jsonl
+    └── reviews_export.xlsx
+```
+
 
 ### 주요 모듈
 
@@ -82,12 +102,14 @@ review-sentiment/
 | `src/analyzer.py` | 감정 분석 및 인사이트 추출 흐름 제어 |
 | `src/visualizer.py` | matplotlib 기반 차트 생성 |
 | `src/reporter.py` | 대시보드 리포트 및 결과 내보내기 |
+| `src/comparison.py` | 제품/카테고리별 비교 분석 |
+| `src/alert.py` | 부정 감정 급증 알림 |
 
 ---
 
 ## 3. 개발 환경
 
-- Python 3
+- Python 3.10 이상
 - SQLite
 - pandas
 - openpyxl
@@ -223,6 +245,10 @@ AI 인사이트 추출
 대시보드 생성
         ↓
 결과 내보내기
+        ↓
+제품별 비교 분석
+        ↓
+부정 감정 급증 알림 확인
 ```
 
 ### 1단계 - 리뷰 데이터 불러오기
@@ -237,22 +263,41 @@ python main.py import --file data/raw/sample_reviews.csv --db data/reviews.db
 python main.py clean --db data/reviews.db
 ```
 
+중복 처리 정책을 지정할 수도 있습니다.
+
+```powershell
+python main.py clean --db data/reviews.db --dedup-policy skip
+python main.py clean --db data/reviews.db --dedup-policy upsert
+```
+
 ### 3단계 - AI 감정 분석
 
 ```powershell
-python main.py analyze --db data/reviews.db
+python main.py analyze --db data/reviews.db --unanalyzed
 ```
 
-일부 리뷰만 테스트하려면:
+일부 리뷰만 분석하려면:
 
 ```powershell
-python main.py analyze --limit 1
+python main.py analyze --db data/reviews.db --unanalyzed --limit 1
+```
+
+특정 리뷰만 분석하려면:
+
+```powershell
+python main.py analyze --db data/reviews.db --id 1
 ```
 
 ### 4단계 - AI 인사이트 추출
 
 ```powershell
 python main.py extract --db data/reviews.db
+```
+
+특정 상품을 대상으로 추출하려면:
+
+```powershell
+python main.py extract --db data/reviews.db --product "텀블러"
 ```
 
 ### 5단계 - 통계 확인
@@ -267,10 +312,73 @@ python main.py stats --db data/reviews.db
 python main.py dashboard --db data/reviews.db --output output/dashboard
 ```
 
+```text
+output/dashboard/
+├── dashboard_report.txt
+├── dashboard.html
+├── sentiment_distribution.png
+├── sentiment_trend.png
+└── rating_sentiment_matrix.png
+```
+
 ### 7단계 - 결과 내보내기
+
+CSV:
 
 ```powershell
 python main.py export --db data/reviews.db --format csv --output output/export
+```
+
+JSONL:
+
+```powershell
+python main.py export --db data/reviews.db --format jsonl --output output/export
+```
+
+Excel:
+
+```powershell
+python main.py export --db data/reviews.db --format excel --output output/export
+```
+
+필터링 예시:
+
+```powershell
+python main.py export --db data/reviews.db --format csv --sentiment positive --rating-min 4 --output output/export
+```
+
+### 8단계 - 제품별 비교 분석
+
+특정 제품 비교:
+
+```powershell
+python main.py compare --db data/reviews.db --products "머그컵" "텀블러"
+```
+
+전체 제품 비교:
+
+```powershell
+python main.py compare --db data/reviews.db --all
+```
+
+### 9단계 - 부정 감정 급증 알림 확인
+
+기본 실행:
+
+```powershell
+python main.py alert --db data/reviews.db
+```
+
+기간과 임계값 지정:
+
+```powershell
+python main.py alert --db data/reviews.db --days 7 --threshold 20
+```
+
+특정 제품만 확인:
+
+```powershell
+python main.py alert --db data/reviews.db --product "텀블러"
 ```
 
 ---
@@ -286,8 +394,10 @@ python main.py export --db data/reviews.db --format csv --output output/export
 | `list` | 리뷰 목록 조회 |
 | `show` | 특정 리뷰 상세 조회 |
 | `stats` | 리뷰 및 감정 분석 통계 조회 |
-| `dashboard` | 차트와 대시보드 리포트 생성 |
-| `export` | 분석 결과를 파일로 내보내기 |
+| `dashboard` | 차트, TXT 리포트, HTML 대시보드 생성 |
+| `export` | 분석 결과를 CSV / JSONL / Excel 파일로 내보내기 |
+| `compare` | 제품/카테고리별 리뷰 비교 분석 |
+| `alert` | 부정 감정 급증 알림 확인 |
 
 세부 옵션은 다음과 같이 확인할 수 있습니다.
 
@@ -441,7 +551,7 @@ python main.py stats --db data/reviews.db
 ## 13. 대시보드
 
 대시보드는 분석된 리뷰를 기반으로 핵심 지표와
-AI 인사이트를 텍스트 리포트 및 차트로 생성합니다.
+AI 인사이트를 텍스트 리포트, HTML 대시보드 및 차트로 생성합니다.
 
 ```powershell
 python main.py dashboard --db data/reviews.db --output output/dashboard
@@ -487,7 +597,11 @@ rating_sentiment_matrix.png
 ### 리포트
 
 ```text
-dashboard_report.txt
+dashboard_report.txt: 텍스트 기반 대시보드 리포트
+dashboard.html: 브라우저에서 확인할 수 있는 HTML 대시보드
+sentiment_distribution.png: 감정 분포 차트
+sentiment_trend.png: 기간별 감정 추이 차트
+rating_sentiment_matrix.png: 별점-감정 매트릭스 차트
 ```
 
 분석된 리뷰 데이터가 없는 경우에는 임의의 분석 데이터를 자동 생성하지 않고,
@@ -510,10 +624,16 @@ CSV 예시:
 python main.py export --db data/reviews.db --format csv --output output/export
 ```
 
+JSONL 예시:
+```powershell
+python main.py export --db data/reviews.db --format jsonl --output output/export
+```
+
 Excel 예시:
 ```powershell
 python main.py export --db data/reviews.db --format excel --output output/export
 ```
+
 
 감정과 최소 별점을 이용해 내보낼 데이터를 필터링할 수 있습니다.
 
@@ -614,7 +734,9 @@ Git 브랜치와 Pull Request를 이용하여 통합했습니다.
 - [x] `src/ai_client.py` - AI API 호출 및 응답 처리
 - [x] `src/analyzer.py` - 감정 분석 및 인사이트 추출
 - [x] `src/visualizer.py` - matplotlib 기반 차트 생성
-- [x] `src/reporter.py` - 대시보드 리포트 및 결과 내보내기
+- [x] `src/reporter.py` - 대시보드 리포트, HTML 대시보드 및 결과 내보내기
+- [x] `src/comparison.py` - 제품/카테고리별 비교 분석
+- [x] `src/alert.py` - 부정 감정 급증 알림
 
 ---
 
@@ -624,7 +746,7 @@ Git 브랜치와 Pull Request를 이용하여 통합했습니다.
 
 | 테스트 | 결과 |
 | --- | :---: |
-| 36개 샘플 CSV 리뷰 가져오기 | ✅ |
+| 샘플 CSV 리뷰 가져오기 | ✅ |
 | 리뷰 데이터 정제 | ✅ |
 | `skip` 중복 처리 | ✅ |
 | `upsert` 중복 데이터 갱신 | ✅ |
@@ -649,6 +771,17 @@ Git 브랜치와 Pull Request를 이용하여 통합했습니다.
 | INFO / WARNING / ERROR 로그 기록 | ✅ |
 | AI API 실패 시 오류 로그 및 해당 리뷰 건너뛰기 | ✅ |
 | 분석 데이터가 없는 경우 처리 | ✅ |
+| JSONL 결과 내보내기 | ✅ |
+| HTML 대시보드 생성 | ✅ |
+| HTML escaping 적용 | ✅ |
+| 제품/카테고리별 비교 분석 | ✅ |
+| 특정 제품 지정 비교 분석 | ✅ |
+| 전체 제품 비교 분석 | ✅ |
+| 부정 감정 급증 알림 | ✅ |
+| 알림 기준 기간 및 임계값 옵션 | ✅ |
+| 특정 제품 알림 필터 | ✅ |
+| 대화형 모드 실행 | ✅ |
+
 
 ### 최종 통합 테스트 흐름
 
@@ -666,11 +799,16 @@ list / show / stats
 dashboard
   ↓
 export
+  ↓
+compare
+  ↓
+alert
 ```
 
 각 단계가 SQLite 데이터베이스를 중심으로 연결되며,
 수집한 리뷰 데이터가 정제 → AI 분석 → 인사이트 추출 →
-시각화 및 리포트 생성까지 이어지는 전체 흐름을 확인했습니다.
+시각화 및 리포트 생성 → 결과 내보내기 → 제품별 비교 분석 →
+부정 감정 급증 알림 확인까지 이어지는 전체 흐름을 확인했습니다.
 
 ---
 
@@ -883,13 +1021,17 @@ python main.py alert --db data/reviews.db --product "텀블러"
 
 대시보드 실행:
 ```powershell
-python main.py dashboard --db data/reviews.db --output output
+python main.py dashboard --db data/reviews.db --output output/dashboard
 ```
 
 실행 후 주요 결과물:
 ```text
-output/dashboard.html
-output/*.png
+output/dashboard/
+├── dashboard.html
+├── dashboard_report.txt
+├── sentiment_distribution.png
+├── sentiment_trend.png
+└── rating_sentiment_matrix.png
 ```
 
 HTML 대시보드는 기존 `dashboard` 명령에 통합되어 있으므로 별도의 `html-dashboard` 명령은 사용하지 않습니다.
