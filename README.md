@@ -109,7 +109,7 @@ output/
 
 ## 3. 개발 환경
 
-- Python 3
+- Python 3.10 이상
 - SQLite
 - pandas
 - openpyxl
