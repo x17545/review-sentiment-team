@@ -7,6 +7,7 @@ import os
 import json
 import base64
 import datetime
+import html
 import pandas as pd
 from typing import Optional
 
@@ -215,6 +216,62 @@ def _parse_list_field(value) -> list:
     return [str(value)]
 
 
+def fetch_recent_reviews(db_path: str, limit: int = 10) -> list[dict]:
+    """최근 리뷰 목록을 조회한다."""
+    from src.repository import get_connection
+
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                cr.review_date,
+                cr.product_name,
+                cr.rating,
+                ar.sentiment,
+                cr.cleaned_text
+            FROM clean_reviews cr
+            LEFT JOIN analysis_results ar
+                ON ar.review_id = cr.id
+            ORDER BY cr.review_date DESC, cr.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def build_recent_reviews_html(reviews: list[dict]) -> str:
+    """최근 리뷰 목록을 HTML 테이블 행으로 변환한다."""
+    if not reviews:
+        return (
+            '<tr>'
+            '<td colspan="5" class="empty">최근 리뷰가 없습니다.</td>'
+            '</tr>'
+        )
+
+    rows = []
+
+    for review in reviews:
+        review_date = html.escape(str(review.get("review_date", "")))
+        product_name = html.escape(str(review.get("product_name", "")))
+        rating = html.escape(str(review.get("rating", "")))
+        sentiment = html.escape(str(review.get("sentiment", "")))
+        cleaned_text = html.escape(str(review.get("cleaned_text", "")))
+
+        rows.append(
+            "<tr>"
+            f"<td>{review_date}</td>"
+            f"<td>{product_name}</td>"
+            f"<td>{rating}</td>"
+            f"<td>{sentiment}</td>"
+            f"<td>{cleaned_text}</td>"
+            "</tr>"
+        )
+
+    return "".join(rows)
+
+
 def build_html_report(
     db_path: str,
     output_dir: str = "output",
@@ -231,6 +288,8 @@ def build_html_report(
     from src.visualizer import fetch_dataframe_for_chart
     df = fetch_dataframe_for_chart(db_path, use_mock=use_mock)
     ai_data = fetch_extraction_data(db_path)
+    recent_reviews = fetch_recent_reviews(db_path, limit=10)
+    recent_reviews_html = build_recent_reviews_html(recent_reviews)
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     html_path = os.path.join(output_dir, "dashboard.html")
@@ -330,6 +389,26 @@ def build_html_report(
   <div class="charts">{chart_html}</div>
 </div>
 
+<div class="card">
+  <h2>최근 리뷰</h2>
+  <div class="table-wrap">
+    <table class="review-table">
+      <thead>
+        <tr>
+          <th>날짜</th>
+          <th>제품</th>
+          <th>별점</th>
+          <th>감정</th>
+          <th>리뷰</th>
+        </tr>
+      </thead>
+      <tbody>
+        {recent_reviews_html}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <p class="foot">본 분석 결과는 입력 리뷰 데이터의 품질과 분포에 영향을 받으며, 참고 자료로 활용하시기 바랍니다.</p>
 </div></body></html>"""
 
@@ -363,6 +442,35 @@ ul { margin:0; padding-left:20px; line-height:1.9; }
 .chart h3 { font-size:14px; color:#555; margin:0 0 8px; }
 .chart img { width:100%; height:auto; border:1px solid #eee; border-radius:8px; }
 .empty { color:#999; }
+.table-wrap {
+  overflow-x: auto;
+}
+
+.review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.review-table th,
+.review-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+  text-align: left;
+  vertical-align: top;
+}
+
+.review-table th {
+  background: #fafafa;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.review-table td:nth-child(1),
+.review-table td:nth-child(3),
+.review-table td:nth-child(4) {
+  white-space: nowrap;
+}
 .foot { color:#999; font-size:12px; text-align:center; margin-top:32px; }
 @media(max-width:640px){ .grid2{grid-template-columns:1fr;} }
 """
