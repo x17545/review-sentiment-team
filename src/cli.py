@@ -35,7 +35,7 @@ DEFAULT_DB_PATH = "data/reviews.db"
 DEFAULT_CONFIG_PATH = "config.json"
 DEFAULT_OUTPUT_DIR = "output"
 
-MAX_PAGE_SIZE = 100                      # --size 상한
+MAX_PAGE_SIZE = 100                       # --size 상한
 VALID_DEDUP_POLICIES = ("skip", "upsert")   # 지원 중복 정책
 
 LOG_DIR = Path("logs")
@@ -307,7 +307,7 @@ def initialize_database(db_path: str, verbose: bool = False) -> None:
         from src.repository import init_db
     except ModuleNotFoundError as e:
         if e.name != "src.repository":
-            raise                                    # 내부 import 오류는 숨기지 않음
+            raise                                       # 내부 import 오류는 숨기지 않음
         if verbose:
             eprint("[경고] src.repository 미연결 (스텁 단계로 진행)")
         return
@@ -644,6 +644,96 @@ def cmd_export(args: argparse.Namespace, config: dict[str, Any]) -> None:
     print(f"\n내보내기 저장: {export_path}")
 
 
+def cmd_alert(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    from datetime import date
+    from src.repository import get_connection
+    from src.alert import detect_negative_surge
+
+    if args.end_date:
+        try:
+            end_date = date.fromisoformat(args.end_date)
+        except ValueError as exc:
+            raise SystemExit("[오류] --end-date는 YYYY-MM-DD 형식이어야 합니다.") from exc
+    else:
+        end_date = date.today()
+
+    with get_connection(args.db) as conn:
+        result = detect_negative_surge(
+            conn=conn,
+            end_date=end_date,
+            days=args.days,
+            threshold=args.threshold,
+            product_name=args.product,
+        )
+
+    target = args.product or "전체 제품"
+    previous = result["previous"]
+    recent = result["recent"]
+
+    print("=" * 56)
+    print("           🚨 부정 감정 급증 감지 결과")
+    print("=" * 56)
+    print(f"대상: {target}")
+    print(
+        f"직전 기간: {result['previous_start']} ~ {result['previous_end']} "
+        f"| 부정 {previous['negative']} / 분석 {previous['total']} "
+        f"({previous['negative_ratio']:.1f}%)"
+    )
+    print(
+        f"최근 기간: {result['recent_start']} ~ {result['recent_end']} "
+        f"| 부정 {recent['negative']} / 분석 {recent['total']} "
+        f"({recent['negative_ratio']:.1f}%)"
+    )
+    print(f"부정률 증가폭: {result['increase']:+.1f}%p")
+    print(f"경고 기준: {result['threshold']:.1f}%p")
+
+    if not result["has_enough_data"]:
+        print("ℹ 판정 보류: 두 비교 기간 모두 분석된 리뷰가 있어야 합니다.")
+    elif result["is_surge"]:
+        print("⚠ 경고: 부정 감정이 기준 이상 급증했습니다.")
+    else:
+        print("✅ 정상: 부정 감정 급증이 감지되지 않았습니다.")
+
+    print("=" * 56)
+
+
+def cmd_compare(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    from src.repository import get_connection
+    from src.comparison import get_available_products, compare_products_data, format_comparison_table
+
+    model_name = config.get("ai", {}).get("model", "")
+    prompt_version = config.get("ai", {}).get("prompt_version", "v1")
+
+    with get_connection(args.db) as conn:
+        all_prods = get_available_products(conn)
+
+        if not all_prods:
+            print("[알림] DB에 등록된 제품 데이터가 없습니다.")
+            return
+
+        targets = args.products
+        if not targets:
+            targets = all_prods
+        else:
+            invalid = [p for p in targets if p not in all_prods]
+            if invalid:
+                eprint(f"[경고] DB에 없는 제품명: {', '.join(invalid)}")
+                eprint(f"  (선택 가능 제품: {', '.join(all_prods)})")
+                targets = [p for p in targets if p in all_prods]
+
+        if len(targets) < 2:
+            raise SystemExit("[오류] 비교 분석을 위해 최소 2개 이상의 유효한 제품이 필요합니다.")
+
+        results = compare_products_data(
+            conn=conn,
+            product_names=targets,
+            model_name=model_name,
+            prompt_version=prompt_version,
+        )
+
+        print(format_comparison_table(results))
+
+
 # ---------------------------------------------------------------------------
 # 파서 구성
 # ---------------------------------------------------------------------------
@@ -730,6 +820,40 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", default=DEFAULT_OUTPUT_DIR, help="출력 폴더")
     p.set_defaults(func=cmd_export)
 
+    # alert (Bonus Feature)
+    p = sub.add_parser(
+        "alert",
+        parents=[parent],
+        help="부정 감정 급증 감지",
+    )
+    p.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="비교할 기간 길이 (기본: 7일)",
+    )
+    p.add_argument(
+        "--threshold",
+        type=float,
+        default=20.0,
+        help="급증 판정 기준 (%%p, 기본: 20)",
+    )
+    p.add_argument(
+        "--end-date",
+        help="최근 기간의 기준 종료일 (YYYY-MM-DD, 기본: 오늘)",
+    )
+    p.add_argument(
+        "--product",
+        help="특정 제품만 분석",
+    )
+    p.set_defaults(func=cmd_alert)
+
+    # compare (Bonus Feature)
+    p = sub.add_parser("compare", parents=[parent], help="제품/카테고리별 리뷰 비교 분석")
+    p.add_argument("--products", nargs="+", help="비교할 제품명 목록 (공백 구분, 2개 이상)")
+    p.add_argument("--all", action="store_true", help="DB의 전체 제품 비교")
+    p.set_defaults(func=cmd_compare)
+
     return parser
 
 
@@ -805,7 +929,7 @@ def build_argv_for(command: str) -> list[str]:
 
     elif command == "analyze":
         eprint("분석 대상: [1]미분석만(기본)  [2]전체  [3]특정 id")
-        while True:                                  # 1/2/3/엔터 외에는 재입력
+        while True:                                    # 1/2/3/엔터 외에는 재입력
             pick = ask("선택 (엔터=미분석만): ")
             if pick in ("", "1", "2", "3"):
                 break
