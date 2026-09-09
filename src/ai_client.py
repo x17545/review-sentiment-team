@@ -100,6 +100,7 @@ def analyze_sentiment(
                     "role": "user",
                     "content": f"""
 다음 고객 리뷰의 감정을 분석하세요.
+리뷰는 한국어, 영어, 일본어, 러시아어 등 어떤 언어로 작성되어 있어도 동일하게 분석하세요.
 
 리뷰:
 {review_text}
@@ -214,7 +215,8 @@ def extract_insights(
                 {
                     "role": "user",
                     "content": f"""
-다음 고객 리뷰들을 분석하세요.
+다음 고객 리뷰의 감정을 분석하세요.
+리뷰는 언어와 무관하게 분석하되, 키워드와 요약은 한국어로 작성하세요.
 
 리뷰 목록:
 {joined_reviews}

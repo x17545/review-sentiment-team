@@ -5,6 +5,7 @@ src/reporter.py
 
 import os
 import json
+import base64
 import datetime
 import pandas as pd
 from typing import Optional
@@ -184,6 +185,187 @@ def build_report(
         f.write(report)
 
     return txt_path
+
+
+def _img_to_base64(path: str) -> Optional[str]:
+    """PNG 파일을 base64 data URI로 변환. 파일이 없으면 None."""
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _parse_list_field(value) -> list:
+    """키워드/제안 필드를 리스트로 정규화 (JSON 배열 문자열이면 파싱)."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+        return [text] if text else []
+    return [str(value)]
+
+
+def build_html_report(
+    db_path: str,
+    output_dir: str = "output",
+    chart_paths: list[str] = None,
+    use_mock: bool = False,
+) -> str:
+    """
+    단일 HTML 대시보드를 생성한다.
+    차트 PNG는 base64로 HTML 안에 직접 삽입하므로, 생성된 HTML 파일 하나만
+    있으면 어디서든 차트까지 완전하게 보인다(단일 파일).
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    from src.visualizer import fetch_dataframe_for_chart
+    df = fetch_dataframe_for_chart(db_path, use_mock=use_mock)
+    ai_data = fetch_extraction_data(db_path)
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    html_path = os.path.join(output_dir, "dashboard.html")
+
+    if df.empty:
+        html = f"""<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8">
+<title>고객 리뷰 감정 분석 대시보드</title>
+<style>{_HTML_STYLE}</style></head>
+<body><div class="wrap">
+<h1>고객 리뷰 감정 분석 대시보드</h1>
+<p class="meta">생성일시: {now_str}</p>
+<div class="card"><p class="empty">분석된 리뷰 데이터가 없습니다. 파이프라인을 먼저 실행해 주세요.</p></div>
+</div></body></html>"""
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html)
+        return html_path
+
+    metrics = calculate_metrics(df)
+    date_min = df["review_date"].min() if "review_date" in df.columns else "N/A"
+    date_max = df["review_date"].max() if "review_date" in df.columns else "N/A"
+
+    metric_items = [
+        ("총 리뷰 수", f"{metrics['total']}건"),
+        ("긍정 비율", f"{metrics['pos_ratio']:.1f}%"),
+        ("중립 비율", f"{metrics['neu_ratio']:.1f}%"),
+        ("부정 비율", f"{metrics['neg_ratio']:.1f}%"),
+        ("평균 별점", f"{metrics['avg_rating']:.2f}점"),
+        ("평균 신뢰도", f"{metrics['avg_score']:.2f}"),
+        ("별점-감정 괴리율", f"{metrics['mismatch_rate']:.1f}%"),
+    ]
+    metric_html = "".join(
+        f'<div class="metric"><span class="mlabel">{k}</span>'
+        f'<span class="mvalue">{v}</span></div>'
+        for k, v in metric_items
+    )
+
+    def kw_list(items):
+        out = []
+        for it in items[:5]:
+            if isinstance(it, (list, tuple)) and len(it) >= 2:
+                out.append(f"<li>{it[0]} <span class='cnt'>({it[1]}회)</span></li>")
+            else:
+                out.append(f"<li>{it}</li>")
+        return "".join(out) or "<li class='empty'>(없음)</li>"
+
+    pos_html = kw_list(ai_data["pos_keywords"])
+    neg_html = kw_list(ai_data["neg_keywords"])
+
+    suggestions = _parse_list_field(ai_data.get("suggestions"))
+    sug_html = "".join(f"<li>{s}</li>" for s in suggestions) or "<li class='empty'>(없음)</li>"
+
+    chart_paths = chart_paths or []
+    chart_html = ""
+    chart_titles = {
+        "sentiment_distribution": "감정 분포",
+        "sentiment_trend": "일자별 감정 추이",
+        "rating_sentiment_matrix": "별점 대비 감정 분포",
+    }
+    for p in chart_paths:
+        uri = _img_to_base64(p)
+        if uri is None:
+            continue
+        stem = os.path.splitext(os.path.basename(p))[0]
+        title = chart_titles.get(stem, stem)
+        chart_html += f'<div class="chart"><h3>{title}</h3><img src="{uri}" alt="{title}"></div>'
+    if not chart_html:
+        chart_html = '<p class="empty">생성된 차트가 없습니다.</p>'
+
+    html = f"""<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8">
+<title>고객 리뷰 감정 분석 대시보드</title>
+<style>{_HTML_STYLE}</style></head>
+<body><div class="wrap">
+<h1>고객 리뷰 감정 분석 대시보드</h1>
+<p class="meta">생성일시: {now_str} &nbsp;|&nbsp; 분석 기간: {date_min} ~ {date_max}</p>
+
+<div class="card">
+  <h2>핵심 지표</h2>
+  <div class="metrics">{metric_html}</div>
+</div>
+
+<div class="grid2">
+  <div class="card"><h2>TOP 긍정 키워드</h2><ul class="kw pos">{pos_html}</ul></div>
+  <div class="card"><h2>TOP 부정 키워드</h2><ul class="kw neg">{neg_html}</ul></div>
+</div>
+
+<div class="card">
+  <h2>AI 인사이트 요약</h2>
+  <p class="summary">{ai_data['summary']}</p>
+  <h2>개선 제안</h2>
+  <ul class="sug">{sug_html}</ul>
+</div>
+
+<div class="card">
+  <h2>차트</h2>
+  <div class="charts">{chart_html}</div>
+</div>
+
+<p class="foot">본 분석 결과는 입력 리뷰 데이터의 품질과 분포에 영향을 받으며, 참고 자료로 활용하시기 바랍니다.</p>
+</div></body></html>"""
+
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    return html_path
+
+
+_HTML_STYLE = """
+* { box-sizing: border-box; }
+body { margin:0; background:#f4f5f7; color:#1a1a1a;
+  font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif; }
+.wrap { max-width:960px; margin:0 auto; padding:32px 20px 60px; }
+h1 { font-size:24px; margin:0 0 4px; }
+.meta { color:#666; font-size:13px; margin:0 0 24px; }
+.card { background:#fff; border-radius:12px; padding:20px 24px; margin-bottom:20px;
+  box-shadow:0 1px 3px rgba(0,0,0,.08); }
+.card h2 { font-size:16px; margin:0 0 14px; padding-bottom:8px; border-bottom:1px solid #eee; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+.metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; }
+.metric { display:flex; flex-direction:column; gap:4px; padding:12px; background:#fafafa; border-radius:8px; }
+.mlabel { font-size:12px; color:#777; }
+.mvalue { font-size:20px; font-weight:700; }
+ul { margin:0; padding-left:20px; line-height:1.9; }
+.kw.pos li::marker { color:#4CAF50; }
+.kw.neg li::marker { color:#F44336; }
+.cnt { color:#999; font-size:13px; }
+.summary { line-height:1.7; margin:0 0 8px; }
+.sug li { margin-bottom:4px; }
+.charts { display:flex; flex-direction:column; gap:24px; }
+.chart h3 { font-size:14px; color:#555; margin:0 0 8px; }
+.chart img { width:100%; height:auto; border:1px solid #eee; border-radius:8px; }
+.empty { color:#999; }
+.foot { color:#999; font-size:12px; text-align:center; margin-top:32px; }
+@media(max-width:640px){ .grid2{grid-template-columns:1fr;} }
+"""
 
 
 def export(

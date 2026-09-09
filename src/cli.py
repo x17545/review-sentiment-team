@@ -522,9 +522,9 @@ def cmd_list(args: argparse.Namespace, config: dict[str, Any]) -> None:
         return
     for r in rows:
         sentiment = r["sentiment"] or "-"
-        rating = f"{r['rating']:.0f}" if r["rating"] is not None else "-"
+        rating = f"{r['rating']:.0f}점" if r["rating"] is not None else "-"
         text = (r["cleaned_text"] or "")[:30]
-        print(f"[{r['id']}] ★{rating} | {r['review_date'] or '-'} | "
+        print(f"[{r['id']}] ★_{rating} | {r['review_date'] or '-'} | "
               f"{text} | {sentiment}")
 
 
@@ -606,7 +606,7 @@ def cmd_stats(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
 def cmd_dashboard(args: argparse.Namespace, config: dict[str, Any]) -> None:
     from src.visualizer import build_charts
-    from src.reporter import build_report
+    from src.reporter import build_report, build_html_report
 
 
     visualization_config = config.get("visualization", {})
@@ -617,10 +617,14 @@ def cmd_dashboard(args: argparse.Namespace, config: dict[str, Any]) -> None:
         output_dir=args.output,
         dpi=dpi,
     )
-    # 2) 차트 경로를 넘겨 종합 리포트 생성
+    # 2) 차트 경로를 넘겨 종합 리포트 생성 (TXT)
     report_path = build_report(args.db, output_dir=args.output,
                                chart_paths=chart_paths)
+    # 3) HTML 대시보드 생성 (차트를 base64로 삽입한 단일 파일)
+    html_path = build_html_report(args.db, output_dir=args.output,
+                                  chart_paths=chart_paths)
     print(f"\n리포트 저장: {report_path}")
+    print(f"HTML 대시보드: {html_path}")
     if chart_paths:
         print("차트 저장:")
         for p in chart_paths:
@@ -767,13 +771,13 @@ INTERACTIVE_COMMANDS = [
 
 
 def choose_command() -> str:
-    """명령을 번호나 이름으로 고르게 한다."""
+    """명령을 번호나 이름으로 고르게 한다. 0(또는 q)이면 종료."""
     menu = "  ".join(f"[{i}]{name}" for i, name in enumerate(INTERACTIVE_COMMANDS, 1))
     while True:
         eprint("\n무엇을 할까요?")
-        eprint("  " + menu)
-        raw = ask("번호 또는 명령 이름 (q=종료): ").lower()
-        if raw in ("q", "quit", "exit"):
+        eprint("  [0]종료  " + menu)
+        raw = ask("번호 또는 명령 이름 (0/q=종료): ").lower()
+        if raw in ("0", "q", "quit", "exit"):
             raise UserAbort("사용자 종료")
         if raw in INTERACTIVE_COMMANDS:              # 이름으로 입력
             return raw
@@ -856,6 +860,7 @@ def build_argv_for(command: str) -> list[str]:
         rmin = ask("최소 별점 1~5 (엔터=제한없음): ")
         if rmin:
             add_option(argv, "--rating-min", str(prompt_until_value(rmin, rating_int)))
+        add_option(argv, "--output", ask("출력 폴더 (엔터=output): "))
 
     return argv
 
@@ -873,24 +878,48 @@ def prompt_until_value(first: str, convert: Callable[[str], Any]) -> Any:
 
 
 def run_interactive() -> int:
-    """대화형 진입점: 명령을 고르고 → argv를 조립해 → 기존 main()에 넘긴다."""
+    """
+    대화형 진입점(반복 루프).
+    명령 선택 → argv 조립 → 실행 → 결과 확인 후 메뉴로 복귀.
+    메뉴에서 0(또는 q)을 누르면 종료한다.
+    """
     eprint("=" * 52)
     eprint("  대화형 모드 (질문에 답하면 명령을 대신 만들어 실행합니다)")
-    eprint("  기존 방식도 그대로 됩니다:  python cli.py list --sentiment 긍정")
+    eprint("  기존 방식도 그대로 됩니다:  python main.py list --sentiment 긍정")
+    eprint("  메뉴에서 0 을 누르면 종료합니다.")
     eprint("=" * 52)
-    try:
-        command = choose_command()
-        argv = build_argv_for(command)
-    except UserAbort as e:
-        eprint(f"\n중단됨: {e}")
-        return 130
 
-    # 조립된 명령을 사용자에게 보여주고 실행 (무엇이 실행되는지 학습 효과)
-    # 실제 실행 파일명을 그대로 반영 (cli.py / main.py / "cli (1).py" 등)
     script_name = Path(sys.argv[0]).name or "main.py"
-    eprint(f"\n실행할 명령:  python {script_name} " + " ".join(argv))
-    eprint("-" * 52)
-    return main(argv)
+
+    while True:
+        try:
+            command = choose_command()          # 0/q이면 여기서 UserAbort
+            argv = build_argv_for(command)
+        except UserAbort as e:
+            eprint(f"\n종료합니다: {e}")
+            return 0
+
+        # 조립된 명령을 보여주고 실행
+        eprint(f"\n실행할 명령:  python {script_name} " + " ".join(argv))
+        eprint("-" * 52)
+        try:
+            main(argv)
+        except UserAbort as e:
+            # 명령 실행 중(대화형 입력 등)의 Ctrl+C/Ctrl+D는 프로그램 종료가 아니라
+            # 현재 명령만 취소하고 메뉴로 돌아간다.
+            eprint(f"\n(명령 취소됨: {e})")
+        except SystemExit as e:
+            # 검증 실패 등으로 인한 종료도 프로그램 전체를 끝내지 않고 메뉴로 복귀
+            if e.code not in (0, None):
+                eprint(f"(명령이 중단되었습니다.)")
+
+        # 결과를 읽을 시간을 준 뒤 메뉴로 복귀
+        eprint("-" * 52)
+        try:
+            safe_input("계속하려면 Enter (메뉴로 돌아갑니다)...")
+        except UserAbort:
+            eprint("\n종료합니다.")
+            return 0
 
 
 # ---------------------------------------------------------------------------

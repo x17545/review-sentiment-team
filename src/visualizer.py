@@ -239,7 +239,7 @@ def build_charts(
         return []
 
     return [
-        plot_sentiment_distribution(df, output_dir),
+        plot_sentiment_distribution(df, output_dir, dpi=dpi),
         plot_sentiment_trend(df, output_dir, dpi=dpi),
         plot_rating_sentiment_matrix(df, output_dir, dpi=dpi),
     ]
