@@ -35,7 +35,7 @@ DEFAULT_DB_PATH = "data/reviews.db"
 DEFAULT_CONFIG_PATH = "config.json"
 DEFAULT_OUTPUT_DIR = "output"
 
-MAX_PAGE_SIZE = 100                      # --size 상한
+MAX_PAGE_SIZE = 100                       # --size 상한
 VALID_DEDUP_POLICIES = ("skip", "upsert")   # 지원 중복 정책
 
 LOG_DIR = Path("logs")
@@ -307,7 +307,7 @@ def initialize_database(db_path: str, verbose: bool = False) -> None:
         from src.repository import init_db
     except ModuleNotFoundError as e:
         if e.name != "src.repository":
-            raise                                    # 내부 import 오류는 숨기지 않음
+            raise                                       # 내부 import 오류는 숨기지 않음
         if verbose:
             eprint("[경고] src.repository 미연결 (스텁 단계로 진행)")
         return
@@ -690,7 +690,44 @@ def cmd_alert(args: argparse.Namespace, config: dict[str, Any]) -> None:
     else:
         print("✅ 정상: 부정 감정 급증이 감지되지 않았습니다.")
 
-    print("=" * 56)    
+    print("=" * 56)
+
+
+def cmd_compare(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    from src.repository import get_connection
+    from src.comparison import get_available_products, compare_products_data, format_comparison_table
+
+    model_name = config.get("ai", {}).get("model", "")
+    prompt_version = config.get("ai", {}).get("prompt_version", "v1")
+
+    with get_connection(args.db) as conn:
+        all_prods = get_available_products(conn)
+
+        if not all_prods:
+            print("[알림] DB에 등록된 제품 데이터가 없습니다.")
+            return
+
+        targets = args.products
+        if not targets:
+            targets = all_prods
+        else:
+            invalid = [p for p in targets if p not in all_prods]
+            if invalid:
+                eprint(f"[경고] DB에 없는 제품명: {', '.join(invalid)}")
+                eprint(f"  (선택 가능 제품: {', '.join(all_prods)})")
+                targets = [p for p in targets if p in all_prods]
+
+        if len(targets) < 2:
+            raise SystemExit("[오류] 비교 분석을 위해 최소 2개 이상의 유효한 제품이 필요합니다.")
+
+        results = compare_products_data(
+            conn=conn,
+            product_names=targets,
+            model_name=model_name,
+            prompt_version=prompt_version,
+        )
+
+        print(format_comparison_table(results))
 
 
 # ---------------------------------------------------------------------------
@@ -807,6 +844,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(func=cmd_alert)
 
+    # compare (Bonus Feature)
+    p = sub.add_parser("compare", parents=[parent], help="제품/카테고리별 리뷰 비교 분석")
+    p.add_argument("--products", nargs="+", help="비교할 제품명 목록 (공백 구분, 2개 이상)")
+    p.add_argument("--all", action="store_true", help="DB의 전체 제품 비교")
+    p.set_defaults(func=cmd_compare)
+
     return parser
 
 
@@ -882,7 +925,7 @@ def build_argv_for(command: str) -> list[str]:
 
     elif command == "analyze":
         eprint("분석 대상: [1]미분석만(기본)  [2]전체  [3]특정 id")
-        while True:                                  # 1/2/3/엔터 외에는 재입력
+        while True:                                    # 1/2/3/엔터 외에는 재입력
             pick = ask("선택 (엔터=미분석만): ")
             if pick in ("", "1", "2", "3"):
                 break
@@ -957,7 +1000,7 @@ def run_interactive() -> int:
     """대화형 진입점: 명령을 고르고 → argv를 조립해 → 기존 main()에 넘긴다."""
     eprint("=" * 52)
     eprint("  대화형 모드 (질문에 답하면 명령을 대신 만들어 실행합니다)")
-    eprint("  기존 방식도 그대로 됩니다:  python cli.py list --sentiment 긍정")
+    eprint("  기존 방식도 그대로 됩니다:   python cli.py list --sentiment 긍정")
     eprint("=" * 52)
     try:
         command = choose_command()
@@ -969,7 +1012,7 @@ def run_interactive() -> int:
     # 조립된 명령을 사용자에게 보여주고 실행 (무엇이 실행되는지 학습 효과)
     # 실제 실행 파일명을 그대로 반영 (cli.py / main.py / "cli (1).py" 등)
     script_name = Path(sys.argv[0]).name or "main.py"
-    eprint(f"\n실행할 명령:  python {script_name} " + " ".join(argv))
+    eprint(f"\n실행할 명령:   python {script_name} " + " ".join(argv))
     eprint("-" * 52)
     return main(argv)
 
