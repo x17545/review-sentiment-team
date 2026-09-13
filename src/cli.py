@@ -25,6 +25,7 @@ import sys
 import json
 import sqlite3
 import argparse
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Callable, Any
@@ -34,8 +35,22 @@ DEFAULT_DB_PATH = "data/reviews.db"
 DEFAULT_CONFIG_PATH = "config.json"
 DEFAULT_OUTPUT_DIR = "output"
 
-MAX_PAGE_SIZE = 100                      # --size 상한
-VALID_DEDUP_POLICIES = ("skip",)        # 현재 실행 가능한 중복 정책 (upsert는 미구현)
+MAX_PAGE_SIZE = 100                       # --size 상한
+VALID_DEDUP_POLICIES = ("skip", "upsert")   # 지원 중복 정책
+
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / "app.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +307,7 @@ def initialize_database(db_path: str, verbose: bool = False) -> None:
         from src.repository import init_db
     except ModuleNotFoundError as e:
         if e.name != "src.repository":
-            raise                                    # 내부 import 오류는 숨기지 않음
+            raise                                       # 내부 import 오류는 숨기지 않음
         if verbose:
             eprint("[경고] src.repository 미연결 (스텁 단계로 진행)")
         return
@@ -349,6 +364,7 @@ def cmd_clean(args: argparse.Namespace, config: dict[str, Any]) -> None:
         f"정제 완료: "
         f"처리 {result['processed']}건, "
         f"저장 {result['inserted']}건, "
+        f"갱신 {result['updated']}건, "
         f"제외 {result['skipped']}건"
     )
 
@@ -395,6 +411,15 @@ def cmd_analyze(args: argparse.Namespace, config: dict[str, Any]) -> None:
         if result.get("status") == "success"
     )
     failed_count = len(results) - success_count
+
+    for result in results:
+        if result.get("status") == "failed":
+            logger.error(
+                "AI 분석 실패: review_id=%s, error=%s",
+                result.get("review_id", "unknown"),
+                result.get("error", "알 수 없는 오류"),
+            )
+
     inserted_count = sum(
         1 for result in results
         if result.get("inserted") is True
@@ -486,13 +511,20 @@ def cmd_list(args: argparse.Namespace, config: dict[str, Any]) -> None:
     print(f"=== 리뷰 목록 ({result['page']}/{result['total_pages']} 페이지, "
           f"총 {result['total']}건) ===")
     if not rows:
+        logger.warning(
+        "조건에 맞는 리뷰가 없습니다: sentiment=%s, rating=%s, date_from=%s, date_to=%s",
+        args.sentiment,
+        args.rating,
+        args.date_from,
+        args.date_to,
+        )
         print("(조건에 맞는 리뷰가 없습니다)")
         return
     for r in rows:
         sentiment = r["sentiment"] or "-"
-        rating = f"{r['rating']:.0f}" if r["rating"] is not None else "-"
+        rating = f"{r['rating']:.0f}점" if r["rating"] is not None else "-"
         text = (r["cleaned_text"] or "")[:30]
-        print(f"[{r['id']}] ★{rating} | {r['review_date'] or '-'} | "
+        print(f"[{r['id']}] ★_{rating} | {r['review_date'] or '-'} | "
               f"{text} | {sentiment}")
 
 
@@ -528,6 +560,7 @@ def cmd_show(args: argparse.Namespace, config: dict[str, Any]) -> None:
 def cmd_stats(args: argparse.Namespace, config: dict[str, Any]) -> None:
     # [권장] --product는 아직 미구현이라 사용 시 명확히 차단
     if getattr(args, "product", None):
+        logger.error("지원하지 않는 옵션 사용: stats --product=%s", args.product)
         raise SystemExit("[오류] stats --product는 아직 지원하지 않습니다.")
 
     from src.repository import get_connection, get_review_count, get_sentiment_stats
@@ -537,14 +570,27 @@ def cmd_stats(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
     with get_connection(args.db) as conn:
         counts = get_review_count(conn)
-        sentiments = get_sentiment_stats(conn, model_name=model_name,
-                                         prompt_version=prompt_version)
+        sentiments = get_sentiment_stats(
+            conn,
+            model_name=model_name,
+            prompt_version=prompt_version,
+        )
+        avg_rating_row = conn.execute(
+            "SELECT AVG(rating) AS avg_rating FROM clean_reviews "
+            "WHERE rating IS NOT NULL"
+        ).fetchone()
+        avg_rating = (
+            float(avg_rating_row["avg_rating"])
+            if avg_rating_row["avg_rating"] is not None
+            else 0.0
+        )
 
     print("=== 리뷰 분석 통계 ===")
     print(f"원본(raw)   : {counts['raw_reviews']}건")
     print(f"정제(clean) : {counts['clean_reviews']}건")
     print(f"분석 완료   : {counts['analysis_results']}건")
     print(f"추출 결과   : {counts['extraction_results']}건")
+    print(f"평균 별점   : {avg_rating:.2f}점")
 
     # [치명 수정] 비율 분모는 전체 analysis_results가 아니라 '이 모델'의 감정 합계.
     #   전체로 나누면 다른 모델 결과가 섞여 비율이 틀린다.
@@ -560,14 +606,25 @@ def cmd_stats(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
 def cmd_dashboard(args: argparse.Namespace, config: dict[str, Any]) -> None:
     from src.visualizer import build_charts
-    from src.reporter import build_report
+    from src.reporter import build_report, build_html_report
 
+
+    visualization_config = config.get("visualization", {})
+    dpi = visualization_config.get("dpi", 300)
     # 1) 차트 생성 (데이터 없으면 build_charts가 빈 리스트 반환)
-    chart_paths = build_charts(args.db, output_dir=args.output)
-    # 2) 차트 경로를 넘겨 종합 리포트 생성
+    chart_paths = build_charts(
+        args.db,
+        output_dir=args.output,
+        dpi=dpi,
+    )
+    # 2) 차트 경로를 넘겨 종합 리포트 생성 (TXT)
     report_path = build_report(args.db, output_dir=args.output,
                                chart_paths=chart_paths)
+    # 3) HTML 대시보드 생성 (차트를 base64로 삽입한 단일 파일)
+    html_path = build_html_report(args.db, output_dir=args.output,
+                                  chart_paths=chart_paths)
     print(f"\n리포트 저장: {report_path}")
+    print(f"HTML 대시보드: {html_path}")
     if chart_paths:
         print("차트 저장:")
         for p in chart_paths:
@@ -585,6 +642,96 @@ def cmd_export(args: argparse.Namespace, config: dict[str, Any]) -> None:
         output=args.output,
     )
     print(f"\n내보내기 저장: {export_path}")
+
+
+def cmd_alert(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    from datetime import date
+    from src.repository import get_connection
+    from src.alert import detect_negative_surge
+
+    if args.end_date:
+        try:
+            end_date = date.fromisoformat(args.end_date)
+        except ValueError as exc:
+            raise SystemExit("[오류] --end-date는 YYYY-MM-DD 형식이어야 합니다.") from exc
+    else:
+        end_date = date.today()
+
+    with get_connection(args.db) as conn:
+        result = detect_negative_surge(
+            conn=conn,
+            end_date=end_date,
+            days=args.days,
+            threshold=args.threshold,
+            product_name=args.product,
+        )
+
+    target = args.product or "전체 제품"
+    previous = result["previous"]
+    recent = result["recent"]
+
+    print("=" * 56)
+    print("           🚨 부정 감정 급증 감지 결과")
+    print("=" * 56)
+    print(f"대상: {target}")
+    print(
+        f"직전 기간: {result['previous_start']} ~ {result['previous_end']} "
+        f"| 부정 {previous['negative']} / 분석 {previous['total']} "
+        f"({previous['negative_ratio']:.1f}%)"
+    )
+    print(
+        f"최근 기간: {result['recent_start']} ~ {result['recent_end']} "
+        f"| 부정 {recent['negative']} / 분석 {recent['total']} "
+        f"({recent['negative_ratio']:.1f}%)"
+    )
+    print(f"부정률 증가폭: {result['increase']:+.1f}%p")
+    print(f"경고 기준: {result['threshold']:.1f}%p")
+
+    if not result["has_enough_data"]:
+        print("ℹ 판정 보류: 두 비교 기간 모두 분석된 리뷰가 있어야 합니다.")
+    elif result["is_surge"]:
+        print("⚠ 경고: 부정 감정이 기준 이상 급증했습니다.")
+    else:
+        print("✅ 정상: 부정 감정 급증이 감지되지 않았습니다.")
+
+    print("=" * 56)
+
+
+def cmd_compare(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    from src.repository import get_connection
+    from src.comparison import get_available_products, compare_products_data, format_comparison_table
+
+    model_name = config.get("ai", {}).get("model", "")
+    prompt_version = config.get("ai", {}).get("prompt_version", "v1")
+
+    with get_connection(args.db) as conn:
+        all_prods = get_available_products(conn)
+
+        if not all_prods:
+            print("[알림] DB에 등록된 제품 데이터가 없습니다.")
+            return
+
+        targets = args.products
+        if not targets:
+            targets = all_prods
+        else:
+            invalid = [p for p in targets if p not in all_prods]
+            if invalid:
+                eprint(f"[경고] DB에 없는 제품명: {', '.join(invalid)}")
+                eprint(f"  (선택 가능 제품: {', '.join(all_prods)})")
+                targets = [p for p in targets if p in all_prods]
+
+        if len(targets) < 2:
+            raise SystemExit("[오류] 비교 분석을 위해 최소 2개 이상의 유효한 제품이 필요합니다.")
+
+        results = compare_products_data(
+            conn=conn,
+            product_names=targets,
+            model_name=model_name,
+            prompt_version=prompt_version,
+        )
+
+        print(format_comparison_table(results))
 
 
 # ---------------------------------------------------------------------------
@@ -616,7 +763,7 @@ def build_parser() -> argparse.ArgumentParser:
     # clean
     p = sub.add_parser("clean", parents=[parent], help="raw -> clean 정제")
     p.add_argument("--dedup-policy", choices=["skip", "upsert"], default=None,
-                   help="중복 처리 정책 (미지정 시 config 값). 현재 실행은 skip만 지원")
+                   help="중복 처리 정책 (미지정 시 config 값)")
     p.set_defaults(func=cmd_clean)
 
     # analyze
@@ -673,6 +820,40 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", default=DEFAULT_OUTPUT_DIR, help="출력 폴더")
     p.set_defaults(func=cmd_export)
 
+    # alert (Bonus Feature)
+    p = sub.add_parser(
+        "alert",
+        parents=[parent],
+        help="부정 감정 급증 감지",
+    )
+    p.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="비교할 기간 길이 (기본: 7일)",
+    )
+    p.add_argument(
+        "--threshold",
+        type=float,
+        default=20.0,
+        help="급증 판정 기준 (%%p, 기본: 20)",
+    )
+    p.add_argument(
+        "--end-date",
+        help="최근 기간의 기준 종료일 (YYYY-MM-DD, 기본: 오늘)",
+    )
+    p.add_argument(
+        "--product",
+        help="특정 제품만 분석",
+    )
+    p.set_defaults(func=cmd_alert)
+
+    # compare (Bonus Feature)
+    p = sub.add_parser("compare", parents=[parent], help="제품/카테고리별 리뷰 비교 분석")
+    p.add_argument("--products", nargs="+", help="비교할 제품명 목록 (공백 구분, 2개 이상)")
+    p.add_argument("--all", action="store_true", help="DB의 전체 제품 비교")
+    p.set_defaults(func=cmd_compare)
+
     return parser
 
 
@@ -714,13 +895,13 @@ INTERACTIVE_COMMANDS = [
 
 
 def choose_command() -> str:
-    """명령을 번호나 이름으로 고르게 한다."""
+    """명령을 번호나 이름으로 고르게 한다. 0(또는 q)이면 종료."""
     menu = "  ".join(f"[{i}]{name}" for i, name in enumerate(INTERACTIVE_COMMANDS, 1))
     while True:
         eprint("\n무엇을 할까요?")
-        eprint("  " + menu)
-        raw = ask("번호 또는 명령 이름 (q=종료): ").lower()
-        if raw in ("q", "quit", "exit"):
+        eprint("  [0]종료  " + menu)
+        raw = ask("번호 또는 명령 이름 (0/q=종료): ").lower()
+        if raw in ("0", "q", "quit", "exit"):
             raise UserAbort("사용자 종료")
         if raw in INTERACTIVE_COMMANDS:              # 이름으로 입력
             return raw
@@ -748,7 +929,7 @@ def build_argv_for(command: str) -> list[str]:
 
     elif command == "analyze":
         eprint("분석 대상: [1]미분석만(기본)  [2]전체  [3]특정 id")
-        while True:                                  # 1/2/3/엔터 외에는 재입력
+        while True:                                    # 1/2/3/엔터 외에는 재입력
             pick = ask("선택 (엔터=미분석만): ")
             if pick in ("", "1", "2", "3"):
                 break
@@ -803,6 +984,7 @@ def build_argv_for(command: str) -> list[str]:
         rmin = ask("최소 별점 1~5 (엔터=제한없음): ")
         if rmin:
             add_option(argv, "--rating-min", str(prompt_until_value(rmin, rating_int)))
+        add_option(argv, "--output", ask("출력 폴더 (엔터=output): "))
 
     return argv
 
@@ -820,24 +1002,48 @@ def prompt_until_value(first: str, convert: Callable[[str], Any]) -> Any:
 
 
 def run_interactive() -> int:
-    """대화형 진입점: 명령을 고르고 → argv를 조립해 → 기존 main()에 넘긴다."""
+    """
+    대화형 진입점(반복 루프).
+    명령 선택 → argv 조립 → 실행 → 결과 확인 후 메뉴로 복귀.
+    메뉴에서 0(또는 q)을 누르면 종료한다.
+    """
     eprint("=" * 52)
     eprint("  대화형 모드 (질문에 답하면 명령을 대신 만들어 실행합니다)")
-    eprint("  기존 방식도 그대로 됩니다:  python cli.py list --sentiment 긍정")
+    eprint("  기존 방식도 그대로 됩니다:  python main.py list --sentiment 긍정")
+    eprint("  메뉴에서 0 을 누르면 종료합니다.")
     eprint("=" * 52)
-    try:
-        command = choose_command()
-        argv = build_argv_for(command)
-    except UserAbort as e:
-        eprint(f"\n중단됨: {e}")
-        return 130
 
-    # 조립된 명령을 사용자에게 보여주고 실행 (무엇이 실행되는지 학습 효과)
-    # 실제 실행 파일명을 그대로 반영 (cli.py / main.py / "cli (1).py" 등)
     script_name = Path(sys.argv[0]).name or "main.py"
-    eprint(f"\n실행할 명령:  python {script_name} " + " ".join(argv))
-    eprint("-" * 52)
-    return main(argv)
+
+    while True:
+        try:
+            command = choose_command()          # 0/q이면 여기서 UserAbort
+            argv = build_argv_for(command)
+        except UserAbort as e:
+            eprint(f"\n종료합니다: {e}")
+            return 0
+
+        # 조립된 명령을 보여주고 실행
+        eprint(f"\n실행할 명령:  python {script_name} " + " ".join(argv))
+        eprint("-" * 52)
+        try:
+            main(argv)
+        except UserAbort as e:
+            # 명령 실행 중(대화형 입력 등)의 Ctrl+C/Ctrl+D는 프로그램 종료가 아니라
+            # 현재 명령만 취소하고 메뉴로 돌아간다.
+            eprint(f"\n(명령 취소됨: {e})")
+        except SystemExit as e:
+            # 검증 실패 등으로 인한 종료도 프로그램 전체를 끝내지 않고 메뉴로 복귀
+            if e.code not in (0, None):
+                eprint(f"(명령이 중단되었습니다.)")
+
+        # 결과를 읽을 시간을 준 뒤 메뉴로 복귀
+        eprint("-" * 52)
+        try:
+            safe_input("계속하려면 Enter (메뉴로 돌아갑니다)...")
+        except UserAbort:
+            eprint("\n종료합니다.")
+            return 0
 
 
 # ---------------------------------------------------------------------------
@@ -857,25 +1063,33 @@ def main(argv: Optional[list[str]] = None) -> int:
     initialize_database(args.db, verbose=args.verbose)
 
     try:
+        logger.info("명령 실행 시작: %s", args.command)
         args.func(args, config)
+        logger.info("명령 실행 완료: %s", args.command)
         return 0
     except UserAbort as e:
+        logger.warning("사용자 중단: %s", e)
         eprint(f"\n중단됨: {e}")
         return 130                      # SIGINT 관례 종료코드
     except KeyboardInterrupt:
+        logger.warning("사용자가 Ctrl+C로 실행을 중단했습니다.")
         eprint("\n중단됨 (Ctrl+C)")
         return 130
     except FileNotFoundError as e:
+        logger.error("파일을 찾을 수 없습니다: %s", e)
         eprint(f"[오류] 파일을 찾을 수 없습니다: {e}")
         return 1
     # [15번] 아래 예외들도 traceback 대신 사용자용 메시지로 정리.
     except ValueError as e:
+        logger.error("잘못된 입력/값: %s", e)
         eprint(f"[오류] 잘못된 입력/값입니다: {e}")
         return 1
     except sqlite3.Error as e:
+        logger.error("데이터베이스 오류: %s", e)
         eprint(f"[오류] 데이터베이스 오류: {e}")
         return 1
     except Exception as e:
+        logger.exception("예기치 못한 오류가 발생했습니다.")
         # 예상 못 한 오류도 최소한 한 줄로. (--verbose면 traceback을 보고 싶을 수 있어 안내)
         eprint(f"[오류] 예기치 못한 오류: {e}")
         if args.verbose:

@@ -214,9 +214,9 @@ def analyze_sentiment(
         response = client.chat.completions.create(
             model=model_name,
             messages=build_sentiment_messages(
-    review_text=review_text,
-    prompt_version=prompt_version,
-),
+                review_text=review_text,
+                prompt_version=prompt_version,
+            ),
         )
 
         text = get_message_content(response)
@@ -320,7 +320,8 @@ def extract_insights(
                 {
                     "role": "user",
                     "content": f"""
-다음 고객 리뷰들을 분석하세요.
+다음 고객 리뷰의 감정을 분석하세요.
+리뷰는 언어와 무관하게 분석하되, 키워드와 요약은 한국어로 작성하세요.
 
 리뷰 목록:
 {joined_reviews}
