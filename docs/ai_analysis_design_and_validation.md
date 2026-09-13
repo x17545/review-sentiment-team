@@ -69,6 +69,11 @@ Regardless of input language, return sentiment as positive, neutral, or negative
 리뷰 전체 의미를 기준으로 감정을 분류하고,
 혼합되거나 애매한 표현은 신중하게 판단하세요.
 요청된 출력 형식을 정확히 지켜주세요.
+```
+
+### User Prompt
+
+```text
 Analyze the review consistently regardless of its language, using its overall meaning and context.
 다음 고객 리뷰의 감정을 분석하세요.
 
