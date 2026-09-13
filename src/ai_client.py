@@ -75,6 +75,8 @@ def build_sentiment_messages(
             {
                 "role": "system",
                 "content": (
+                    "Analyze Korean, English, and multilingual reviews based on meaning and context. "
+                    "Regardless of input language, return sentiment as positive, neutral, or negative. "
                     "당신은 고객 리뷰 감정분석 도우미입니다. "
                     "리뷰 전체 의미를 기준으로 감정을 분류하고, "
                     "혼합되거나 애매한 표현은 신중하게 판단하세요. "
@@ -84,6 +86,7 @@ def build_sentiment_messages(
             {
                 "role": "user",
                 "content": f"""
+Analyze the review consistently regardless of its language, using its overall meaning and context.
 다음 고객 리뷰의 감정을 분석하세요.
 
 리뷰:
