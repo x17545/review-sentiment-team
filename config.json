@@ -1,11 +1,12 @@
 {
   "ai": {
-    "api_key_env": "OPENAI_API_KEY",
-    "base_url": "https://copa.codyssey.kr/v1",
-    "model": "gpt-5-mini",
-    "timeout": 30,
-    "retry": 2
-  },
+  "api_key_env": "OPENAI_API_KEY",
+  "base_url": "https://copa.codyssey.kr/v1",
+  "model": "gpt-5-mini",
+  "prompt_version": "v3",
+  "timeout": 30,
+  "retry": 2
+},
   "cleaning": {
     "duplicate_policy": "skip",
     "min_review_length": 5
