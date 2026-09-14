@@ -108,8 +108,9 @@ def plot_sentiment_distribution(
     plt.pie(
         counts, 
         labels=labels, 
-        autopct="%1.1f%%", 
-        startangle=140, 
+        autopct="%1.1f%%",
+        pctdistance=0.78,
+        startangle=140,
         colors=colors,
         wedgeprops=dict(width=0.4, edgecolor="w", linewidth=2)
     )
