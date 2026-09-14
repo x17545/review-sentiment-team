@@ -131,8 +131,8 @@ output/
 | AI 호출 | `ai_client.py` | (openai SDK만) |
 | 시각화 | `visualizer.py` | repository |
 | 리포트 | `reporter.py` | repository, visualizer |
-| 비교 분석 | `comparison.py` | repository |
-| 급증 알림 | `alert.py` | repository |
+| 비교 분석 | `comparison.py` | (DB connection 주입) |
+| 급증 알림 | `alert.py` | (DB connection 주입) |
 | 저장 | `repository.py` | (sqlite3만, 최하위 계층) |
 
 명령별 데이터 흐름(파이프라인):
