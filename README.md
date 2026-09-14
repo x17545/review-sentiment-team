@@ -657,7 +657,7 @@ python main.py dashboard --db data/reviews.db --output output/dashboard
 #### 현재 실제 코드 동작 방식
 
 - **괴리(불일치) 판단 기준 및 조건 분기**
-  - 정량적 점수(별점 1~5점)와 정성적 분석(AI 감정 판정)의 방향성이 상반되는 경우를 추출합니다.
+  - 정량적 점수(별점 1-5점)와 정성적 분석(AI 감정 판정)의 방향성이 상반되는 경우를 추출합니다.
   - 고평점-부정 괴리: 별점 4점 또는 5점이면서 AI 감정 판정이 `negative`인 경우
   - 저평점-긍정 괴리: 별점 1점 또는 2점이면서 AI 감정 판정이 `positive`인 경우
   - 별점 3점 및 AI 중립(`neutral`) 판정 리뷰는 괴리 리뷰 수(분자)에는 포함하지 않습니다.
@@ -671,8 +671,8 @@ python main.py dashboard --db data/reviews.db --output output/dashboard
   × 100
 ```
 
-분자는 [별점 4~5점 + negative] + [별점 1~2점 + positive] 리뷰 수이며, 분모는 별점 3점 및 neutral 리뷰도 포함한 전체 분석 완료 리뷰 수입니다.
-예를 들어 전체 분석 완료 리뷰가 100건이고, 4~5점 + negative가 3건, 1~2점 + positive가 2건이라면 괴리율은 (5 / 100) × 100 = 5.0%입니다.
+분자는 [별점 4-5점 + negative] + [별점 1-2점 + positive] 리뷰 수이며, 분모는 별점 3점 및 neutral 리뷰도 포함한 전체 분석 완료 리뷰 수입니다.
+예를 들어 전체 분석 완료 리뷰가 100건이고, 4-5점 + negative가 3건, 1-2점 + positive가 2건이라면 괴리율은 (5 / 100) × 100 = 5.0%입니다.
 
 - **지표 채택 이유**
   - 비즈니스 관점에서는 높은 별점에 가려진 부정 리뷰 등 단순 평균 별점만으로 확인하기 어려운 이상 리뷰를 탐지하여 향후 고객 응대나 품질 관리 시 우선 확인 대상으로 활용할 수 있습니다.
@@ -680,8 +680,8 @@ python main.py dashboard --db data/reviews.db --output output/dashboard
   - 기술적 관점에서는 반어법, 비꼼, 복합 문맥 등 AI가 오분류했을 가능성이 있는 사례를 선별하여 향후 프롬프트 개선 및 성능 검증 데이터로 참고할 수 있습니다.
 
 - **별점-감정 분포 시각화 (rating_sentiment_matrix.png)**
-  - pd.crosstab()으로 별점(1~5점)과 감정(positive, neutral, negative)의 교차 빈도를 집계한 후, kind="bar", stacked=True를 적용하여 별점별 감정 분포를 누적 막대 차트로 시각화합니다.
-  - 각 별점 구간에서 긍정·중립·부정 감정의 건수 분포를 확인할 수 있으며, 특히 1~2점에서 positive가 나타나거나 4~5점에서 negative가 나타나는 등 별점과 감정의 방향이 예상과 다른 리뷰가 어느 구간에서 발생하는지 비교할 수 있습니다.
+  - pd.crosstab()으로 별점(1-5점)과 감정(positive, neutral, negative)의 교차 빈도를 집계한 후, kind="bar", stacked=True를 적용하여 별점별 감정 분포를 누적 막대 차트로 시각화합니다.
+  - 각 별점 구간에서 긍정·중립·부정 감정의 건수 분포를 확인할 수 있으며, 특히 1-2점에서 positive가 나타나거나 4-5점에서 negative가 나타나는 등 별점과 감정의 방향이 예상과 다른 리뷰가 어느 구간에서 발생하는지 비교할 수 있습니다.
 
 #### 향후 개선 방안
 
@@ -892,14 +892,14 @@ AI 인사이트 추출 결과
 | source_file | TEXT | NOT NULL | 출처 파일명 |
 | text_hash | TEXT | NOT NULL, UNIQUE | 정규화 텍스트의 SHA-256 해시(중복 판정 키) |
 | cleaned_text | TEXT | NOT NULL | 정규화된 본문 |
-| rating | REAL | CHECK(NULL 또는 1~5) | 검증된 별점 |
+| rating | REAL | CHECK(NULL 또는 1-5) | 검증된 별점 |
 | review_date | TEXT | | YYYY-MM-DD로 통일된 작성일 |
 | product_name | TEXT | | 정규화된 제품명 |
 | created_at | TEXT | NOT NULL, DEFAULT 현재시각 | 정제 시각 |
 
 `text_hash UNIQUE`: 동일 리뷰의 중복 저장을 DB 차원에서 차단합니다. 해시는
 정규화된 텍스트 기준이라 표기만 다른 동일 리뷰를 같은 것으로 판정합니다.
-`rating CHECK`: 별점은 1~5만 유효하므로 애플리케이션 검증에 더해 DB에서도
+`rating CHECK`: 별점은 1-5만 유효하므로 애플리케이션 검증에 더해 DB에서도
 범위를 강제해 이중으로 무결성을 보장합니다.
 
 #### analysis_results — 감정 분석 결과
@@ -909,7 +909,7 @@ AI 인사이트 추출 결과
 | id | INTEGER | PK, AUTOINCREMENT | 분석 결과 ID |
 | review_id | INTEGER | NOT NULL, FK→clean_reviews(id) ON DELETE CASCADE | 정제 리뷰 참조 |
 | sentiment | TEXT | NOT NULL, CHECK(positive/neutral/negative/unknown) | 분석된 감정 |
-| confidence | REAL | CHECK(NULL 또는 0~1) | 신뢰도 점수 |
+| confidence | REAL | CHECK(NULL 또는 0-1) | 신뢰도 점수 |
 | model_name | TEXT | NOT NULL | 사용 모델명 |
 | prompt_version | TEXT | NOT NULL, DEFAULT 'v1' | 프롬프트 버전 |
 | raw_response | TEXT | | AI 원본 응답(재현·디버깅용) |
@@ -1112,7 +1112,7 @@ AI 감정 분석 프롬프트에서 한국어, 영어 및 두 언어가 혼합�
 
 ```text
 sentiment: positive | neutral | negative
-confidence: 0.0 ~ 1.0
+confidence: 0.0 - 1.0
 ```
 
 따라서 기존 데이터베이스 구조와 CLI 분석 흐름을 변경하지 않고 다국어 리뷰를 처리할 수 있습니다.
