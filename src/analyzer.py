@@ -1,4 +1,4 @@
-# src/analyzer.py
+﻿# src/analyzer.py
 
 """
 AI 분석 업무 흐름을 담당하는 모듈입니다.
@@ -33,6 +33,7 @@ def analyze_review(
     base_url: str,
     timeout: float,
     retry: int,
+    prompt_version: str = "v1",
 ) -> dict:
     """
     리뷰 1건을 AI로 분석합니다.
@@ -45,8 +46,8 @@ def analyze_review(
         base_url=base_url,
         timeout=timeout,
         retry=retry,
+        prompt_version=prompt_version,
     )
-
 
 def analyze_reviews(
     review_texts: list[str],
@@ -55,6 +56,7 @@ def analyze_reviews(
     base_url: str,
     timeout: float,
     retry: int,
+    prompt_version: str = "v1",
 ) -> list[dict]:
     """
     여러 리뷰를 순서대로 분석합니다.
@@ -74,6 +76,7 @@ def analyze_reviews(
                 base_url=base_url,
                 timeout=timeout,
                 retry=retry,
+                prompt_version=prompt_version,
             )
 
             results.append({
@@ -151,6 +154,7 @@ def analyze_reviews_from_db(
                 base_url=base_url,
                 timeout=timeout,
                 retry=retry,
+                prompt_version=prompt_version,
             )
 
             if result.get("status") != "success":
