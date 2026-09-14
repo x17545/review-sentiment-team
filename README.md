@@ -105,6 +105,51 @@ output/
 | `src/comparison.py` | 제품/카테고리별 비교 분석 |
 | `src/alert.py` | 부정 감정 급증 알림 |
 
+### 모듈 아키텍처 및 의존 관계
+
+본 프로젝트는 계층형(Layered) 아키텍처로 설계했습니다. 각 모듈은 단일 책임을
+지며, 상위 계층이 하위 계층을 호출하는 단방향 의존 구조를 따릅니다.
+
+계층형으로 분리한 이유는 다음과 같습니다.
+
+- **변경 격리**: 정제 규칙(cleaner)이 바뀌어도 저장(repository)이나 AI
+  호출(ai_client)에 영향이 없어, 4인이 모듈별로 병렬 개발할 수 있었습니다.
+- **단일 데이터 관문**: 모든 데이터 접근은 `repository.py`로만 수렴합니다.
+  어떤 모듈도 `sqlite3.connect()`를 직접 호출하지 않고 `get_connection()`을
+  거치므로, 외래키·WAL·타임아웃 설정이 모든 연결에 일관되게 적용됩니다.
+  비교(comparison)·알림(alert) 모듈도 자체적으로 DB에 연결하지 않고, cli가 repository의 get_connection()으로 연 연결을 인자로 주입받아 조회합니다.
+  이로써 보너스 기능을 포함한 모든 모듈이 동일한 연결 관리 원칙을 따릅니다.
+- **역방향 의존 없음**: 하위 계층이 상위를 호출하지 않아 순환 의존이 없습니다.
+
+| 계층 | 모듈 | 의존하는 모듈 |
+| --- | --- | --- |
+| 진입 | `main.py` | cli |
+| CLI | `cli.py` | collector, cleaner, analyzer, repository, visualizer, reporter |
+| 수집 | `collector.py` | (pandas만) |
+| 정제 | `cleaner.py` | repository |
+| 분석 흐름 | `analyzer.py` | ai_client, repository |
+| AI 호출 | `ai_client.py` | (openai SDK만) |
+| 시각화 | `visualizer.py` | repository |
+| 리포트 | `reporter.py` | repository, visualizer |
+| 비교 분석 | `comparison.py` | repository |
+| 급증 알림 | `alert.py` | repository |
+| 저장 | `repository.py` | (sqlite3만, 최하위 계층) |
+
+명령별 데이터 흐름(파이프라인):
+
+```text
+[import]   파일 → collector → repository(raw_reviews)
+[clean]    raw_reviews → cleaner → repository(중복판정·clean_reviews)
+[analyze]  clean_reviews → analyzer → ai_client → repository(analysis_results)
+[extract]  clean_reviews+analysis → analyzer → ai_client → repository(extraction_results)
+[stats/list/show]  repository → cli(출력)
+[dashboard]  repository → visualizer(차트) + reporter(TXT/HTML)
+[export]   repository → reporter(CSV/JSONL/Excel)
+```
+
+전체 흐름은 `수집 → 정제 → AI분석 → 집계/시각화 → 리포트`의 단방향이며,
+모든 단계의 데이터는 SQLite(repository)를 통해 전달됩니다.
+
 ---
 
 ## 3. 개발 환경
@@ -814,6 +859,101 @@ AI 인사이트 추출 결과
 
 기존 데이터베이스에 필요한 컬럼이 없는 경우
 초기화 과정에서 스키마 마이그레이션을 수행합니다.
+
+### 데이터베이스 스키마 명세
+
+4개 테이블로 구성되며, 각 테이블은 파이프라인의 한 단계에 대응하고 외래키로
+상위 단계와 연결됩니다.
+
+#### raw_reviews — 원본 리뷰 (가공 전 원본 보존)
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | PK, AUTOINCREMENT | 원본 리뷰 ID |
+| source_file | TEXT | NOT NULL | 원본 파일명 |
+| original_row_number | INTEGER | | 원본 파일 내 행 번호 |
+| raw_text | TEXT | NOT NULL | 가공 전 리뷰 원문 |
+| raw_rating | REAL | | 가공 전 별점(검증 전) |
+| raw_date | TEXT | | 가공 전 작성일 |
+| raw_product | TEXT | | 가공 전 제품명 |
+| processed | INTEGER | NOT NULL, DEFAULT 0 | 정제 시도 완료 여부(0/1) |
+| imported_at | TEXT | NOT NULL, DEFAULT 현재시각 | 수집 시각 |
+
+`processed` 컬럼: 정제 완료 여부를 clean_reviews에 행이 있는지로 판단하면,
+중복이라 저장되지 않은(skip) 원본이 매번 재정제 대상으로 잡힙니다. "처리를
+시도했는가"를 직접 기록해 `clean` 명령의 멱등성을 보장합니다.
+
+#### clean_reviews — 정제 리뷰 (검증·정규화 완료)
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | PK, AUTOINCREMENT | 정제 리뷰 ID |
+| raw_id | INTEGER | NOT NULL, FK→raw_reviews(id) ON DELETE CASCADE | 원본 참조 |
+| source_file | TEXT | NOT NULL | 출처 파일명 |
+| text_hash | TEXT | NOT NULL, UNIQUE | 정규화 텍스트의 SHA-256 해시(중복 판정 키) |
+| cleaned_text | TEXT | NOT NULL | 정규화된 본문 |
+| rating | REAL | CHECK(NULL 또는 1~5) | 검증된 별점 |
+| review_date | TEXT | | YYYY-MM-DD로 통일된 작성일 |
+| product_name | TEXT | | 정규화된 제품명 |
+| created_at | TEXT | NOT NULL, DEFAULT 현재시각 | 정제 시각 |
+
+`text_hash UNIQUE`: 동일 리뷰의 중복 저장을 DB 차원에서 차단합니다. 해시는
+정규화된 텍스트 기준이라 표기만 다른 동일 리뷰를 같은 것으로 판정합니다.
+`rating CHECK`: 별점은 1~5만 유효하므로 애플리케이션 검증에 더해 DB에서도
+범위를 강제해 이중으로 무결성을 보장합니다.
+
+#### analysis_results — 감정 분석 결과
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | PK, AUTOINCREMENT | 분석 결과 ID |
+| review_id | INTEGER | NOT NULL, FK→clean_reviews(id) ON DELETE CASCADE | 정제 리뷰 참조 |
+| sentiment | TEXT | NOT NULL, CHECK(positive/neutral/negative/unknown) | 분석된 감정 |
+| confidence | REAL | CHECK(NULL 또는 0~1) | 신뢰도 점수 |
+| model_name | TEXT | NOT NULL | 사용 모델명 |
+| prompt_version | TEXT | NOT NULL, DEFAULT 'v1' | 프롬프트 버전 |
+| raw_response | TEXT | | AI 원본 응답(재현·디버깅용) |
+| analyzed_at | TEXT | NOT NULL, DEFAULT 현재시각 | 분석 시각 |
+| — | | UNIQUE(review_id, model_name, prompt_version) | 복합 유니크 |
+
+`sentiment CHECK`: 감정 값을 4종으로 제한해 오타·예외 값의 저장을 막습니다.
+형식을 벗어난 AI 응답은 unknown으로 분류합니다.
+복합 UNIQUE `(review_id, model_name, prompt_version)`: 같은 리뷰라도 모델이나
+프롬프트 버전이 다르면 별도 결과로 보존합니다. 프롬프트 개선(v1→v2) 전후
+비교나 다른 모델 재분석을 가능하게 하는 재현성 설계입니다. 같은 조합으로
+재분석하면 기존 행을 덮어씁니다.
+
+#### extraction_results — 키워드/요약 추출 결과
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | PK, AUTOINCREMENT | 추출 결과 ID |
+| condition_json | TEXT | NOT NULL, DEFAULT '{}' | 추출 조건(감정/제품/기간) JSON |
+| review_ids_json | TEXT | | 포함된 리뷰 ID 목록 JSON |
+| positive_keywords_json | TEXT | | 긍정 키워드 JSON |
+| negative_keywords_json | TEXT | | 부정 키워드 JSON |
+| keywords_json | TEXT | | 전체 키워드 JSON |
+| summary | TEXT | | 전체 요약문 |
+| suggestions | TEXT | | 개선 제안 JSON |
+| model_name | TEXT | NOT NULL | 사용 모델명 |
+| prompt_version | TEXT | NOT NULL, DEFAULT 'v1' | 프롬프트 버전 |
+| raw_response | TEXT | | AI 원본 응답 |
+| created_at | TEXT | NOT NULL, DEFAULT 현재시각 | 추출 시각 |
+
+#### 테이블 관계 및 제약 요약
+
+```text
+raw_reviews ──1:1(raw_id, CASCADE)──▶ clean_reviews ──1:N(review_id, CASCADE)──▶ analysis_results
+                                                       extraction_results(독립 저장)
+```
+
+ON DELETE CASCADE로, 상위 데이터가 삭제되면 종속된 분석 결과도 함께 정리되어
+고아 레코드가 남지 않습니다.
+
+인덱스: 자주 필터·조인되는 컬럼에 인덱스를 둡니다. (raw: source_file/processed/
+imported_at, clean: raw_id/review_date/product_name, analysis: review_id/
+sentiment/analyzed_at, extraction: created_at) text_hash는 UNIQUE 제약이 인덱스를
+자동 생성하므로 중복 생성하지 않습니다.
 
 ### 로그 관리
 
