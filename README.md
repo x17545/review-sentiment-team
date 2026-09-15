@@ -229,6 +229,9 @@ AI 관련 설정은 `config.json`에서 관리합니다.
 API 키 자체는 `config.json`에 직접 작성하지 않고 `.env`의
 `OPENAI_API_KEY` 환경변수를 통해 불러옵니다.
 
+프롬프트 버전별 감정 분류 기준, confidence 설계 및 검증 결과는
+[AI 감정분석 설계 및 프롬프트 검증](docs/ai_analysis_design_and_validation.md) 문서에서 확인할 수 있습니다.
+
 ---
 
 ## 6. 실행 방법

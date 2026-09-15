@@ -58,6 +58,133 @@ def get_message_content(response) -> str:
 
     return content.strip()
 
+def build_sentiment_messages(
+    review_text: str,
+    prompt_version: str = "v1",
+) -> list[dict]:
+    """
+    prompt_version에 따라 감정분석 프롬프트를 생성합니다.
+
+    v1: 초기 기본 프롬프트
+    v2: 감정 분류 기준과 confidence 기준을 구체화한 개선 프롬프트
+    v3: 혼합/애매 리뷰의 neutral 판단 및 confidence 기준을 강화한 프롬프트
+    """
+
+    if prompt_version == "v3":
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "Analyze Korean, English, and multilingual reviews based on meaning and context. "
+                    "Regardless of input language, return sentiment as positive, neutral, or negative. "
+                    "당신은 고객 리뷰 감정분석 도우미입니다. "
+                    "리뷰 전체 의미를 기준으로 감정을 분류하고, "
+                    "혼합되거나 애매한 표현은 신중하게 판단하세요. "
+                    "요청된 출력 형식을 정확히 지켜주세요."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"""
+Analyze the review consistently regardless of its language, using its overall meaning and context.
+다음 고객 리뷰의 감정을 분석하세요.
+
+리뷰:
+{review_text}
+
+감정 분류 기준:
+- positive: 리뷰 전체의 핵심 평가가 명확한 만족, 추천, 칭찬, 긍정적 경험인 경우
+- negative: 리뷰 전체의 핵심 평가가 명확한 불만, 문제점, 실망, 개선 요구인 경우
+- neutral: 사실 전달 중심이거나, 긍정과 부정이 함께 존재하여 어느 한쪽이 명확히 우세하지 않거나, 판단이 애매한 경우
+
+판단 원칙:
+- 특정 긍정 단어 또는 부정 단어 하나만 보고 판단하지 마세요.
+- 리뷰 전체 의미와 최종 평가를 기준으로 판단하세요.
+- 긍정과 부정이 함께 존재하면 어느 한쪽이 명확히 더 강한 경우에만 positive 또는 negative로 판단하세요.
+- 긍정과 부정의 비중이 비슷하거나 어느 쪽이 핵심인지 명확하지 않으면 neutral로 판단하세요.
+- "괜찮다", "나쁘지 않다", "조금 아쉽다"처럼 강도가 약하거나 모호한 표현은 과도하게 positive 또는 negative로 해석하지 마세요.
+
+confidence 기준:
+- confidence는 감정의 강도가 아니라 해당 분류에 대한 확신도입니다.
+- 명확한 긍정 또는 명확한 부정은 높은 confidence를 부여할 수 있습니다.
+- 긍정과 부정이 혼재하면 confidence를 낮추세요.
+- 표현이 모호하거나 정보가 부족하면 confidence를 낮추세요.
+- neutral로 판단했더라도 근거가 명확하면 confidence를 높게 부여할 수 있습니다.
+- mixed 또는 uncertain 리뷰에서 과도하게 높은 confidence를 부여하지 마세요.
+
+반드시 아래 형식으로만 답하세요.
+
+sentiment: positive 또는 neutral 또는 negative
+confidence: 0.0부터 1.0 사이 숫자
+""".strip(),
+            },
+        ]
+
+    if prompt_version == "v2":
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "당신은 고객 리뷰 감정분석 도우미입니다. "
+                    "리뷰 전체 의미를 기준으로 감정을 분류하고, "
+                    "요청된 출력 형식을 정확히 지켜주세요."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"""
+다음 고객 리뷰의 감정을 분석하세요.
+
+리뷰:
+{review_text}
+
+감정 분류 기준:
+- positive: 리뷰의 핵심 평가가 만족, 추천, 칭찬, 긍정적 경험인 경우
+- negative: 리뷰의 핵심 평가가 불만, 문제점, 실망, 개선 요구인 경우
+- neutral: 긍정 또는 부정으로 명확히 판단하기 어렵거나 사실 전달 중심인 경우
+
+판단 원칙:
+- 일부 긍정 또는 부정 단어 하나만 보고 판단하지 말고 리뷰 전체 의미를 기준으로 판단하세요.
+- 긍정과 부정이 함께 존재하면 어느 평가가 핵심인지 판단하세요.
+- 어느 쪽이 핵심인지 불명확하면 neutral로 판단하세요.
+
+confidence 기준:
+- confidence는 감정의 강도가 아니라 해당 감정 분류에 대한 확신도입니다.
+- 감정이 매우 명확하면 1.0에 가깝게 부여하세요.
+- 긍정과 부정이 혼재하거나 문맥이 모호할수록 낮게 부여하세요.
+- 정보가 부족하여 판단이 어려운 경우 confidence를 낮게 부여하세요.
+
+반드시 아래 형식으로만 답하세요.
+
+sentiment: positive 또는 neutral 또는 negative
+confidence: 0.0부터 1.0 사이 숫자
+""".strip(),
+            },
+        ]
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "당신은 고객 리뷰 감정분석 도우미입니다. "
+                "요청된 출력 형식을 정확히 지켜주세요."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"""
+다음 고객 리뷰의 감정을 분석하세요.
+
+리뷰:
+{review_text}
+
+반드시 아래 형식으로만 답하세요.
+
+sentiment: positive 또는 neutral 또는 negative
+confidence: 0.0부터 1.0 사이 숫자
+""".strip(),
+        },
+    ]
 
 def analyze_sentiment(
     review_text: str,
@@ -66,6 +193,7 @@ def analyze_sentiment(
     base_url: str,
     timeout: float,
     retry: int,
+    prompt_version: str = "v1",
 ) -> dict:
     """
     리뷰 1건을 감정분석합니다.
@@ -88,36 +216,10 @@ def analyze_sentiment(
 
         response = client.chat.completions.create(
             model=model_name,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "당신은 다국어 고객 리뷰 감정분석 도우미입니다. "
-                        "한국어, 영어 또는 한국어와 영어가 섞인 리뷰를 분석할 수 있습니다. "
-                        "입력 언어와 관계없이 감정 분류는 "
-                        "positive, neutral, negative 중 하나로 반환하세요. "
-                        "요청된 출력 형식을 정확히 지켜주세요."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"""
-다음 고객 리뷰의 감정을 분석하세요.
-리뷰는 한국어, 영어, 일본어, 러시아어 등 어떤 언어로 작성되어 있어도 동일하게 분석하세요.
-
-리뷰는 한국어, 영어 또는 두 언어가 섞여 있을 수 있습니다.
-리뷰의 언어와 관계없이 의미와 문맥을 기준으로 감정을 판단하세요.
-
-리뷰:
-{review_text}
-
-반드시 아래 형식으로만 답하세요.
-
-sentiment: positive 또는 neutral 또는 negative
-confidence: 0.0부터 1.0 사이 숫자
-""".strip(),
-                },
-            ],
+            messages=build_sentiment_messages(
+                review_text=review_text,
+                prompt_version=prompt_version,
+            ),
         )
 
         text = get_message_content(response)
