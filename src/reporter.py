@@ -92,13 +92,20 @@ def build_report(
     db_path: str,
     output_dir: str = "output",
     chart_paths: list[str] = None,
-    use_mock: bool = False
+    use_mock: bool = False,
+    model_name: str | None = None,
+    prompt_version: str | None = None,
 ) -> str:
     """대시보드 리포트 텍스트 생성기 (데이터 유무에 따른 분기 처리)"""
     os.makedirs(output_dir, exist_ok=True)
     
     from src.visualizer import fetch_dataframe_for_chart
-    df = fetch_dataframe_for_chart(db_path, use_mock=use_mock)
+    df = fetch_dataframe_for_chart(
+        db_path,
+        use_mock=use_mock,
+        model_name=model_name,
+        prompt_version=prompt_version,
+    )
     ai_data = fetch_extraction_data(db_path)
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -277,6 +284,8 @@ def build_html_report(
     output_dir: str = "output",
     chart_paths: list[str] = None,
     use_mock: bool = False,
+    model_name: str | None = None,
+    prompt_version: str | None = None,
 ) -> str:
     """
     단일 HTML 대시보드를 생성한다.
@@ -286,7 +295,12 @@ def build_html_report(
     os.makedirs(output_dir, exist_ok=True)
 
     from src.visualizer import fetch_dataframe_for_chart
-    df = fetch_dataframe_for_chart(db_path, use_mock=use_mock)
+    df = fetch_dataframe_for_chart(
+        db_path,
+        use_mock=use_mock,
+        model_name=model_name,
+        prompt_version=prompt_version,
+    )
     ai_data = fetch_extraction_data(db_path)
     recent_reviews = fetch_recent_reviews(db_path, limit=10)
     recent_reviews_html = build_recent_reviews_html(recent_reviews)
@@ -482,7 +496,9 @@ def export(
     sentiment: Optional[str] = None,
     rating_min: Optional[int] = None,
     output: str = "output",
-    use_mock: bool = False
+    use_mock: bool = False,
+    model_name: str | None = None,
+    prompt_version: str | None = None,
 ) -> str:
     """내보내기 함수 (데이터가 없으면 Mock을 자동 주입하지 않고 안내 후 빈 파일 생성)"""
     os.makedirs(output, exist_ok=True)
@@ -506,8 +522,16 @@ def export(
                         a.confidence
                     FROM clean_reviews c
                     JOIN analysis_results a ON c.id = a.review_id
+                    WHERE (? IS NULL OR a.model_name = ?)
+                      AND (? IS NULL OR a.prompt_version = ?)
                 """
-                df = pd.read_sql_query(query, conn)
+                params = (
+                    model_name,
+                    model_name,
+                    prompt_version,
+                    prompt_version,
+                )
+                df = pd.read_sql_query(query, conn, params=params)
         except Exception:
             pass
 

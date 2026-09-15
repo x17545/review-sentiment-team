@@ -25,7 +25,12 @@ def setup_korean_font():
     plt.rc("axes", unicode_minus=False)
 
 
-def fetch_dataframe_for_chart(db_path: str, use_mock: bool = False) -> pd.DataFrame:
+def fetch_dataframe_for_chart(
+    db_path: str,
+    use_mock: bool = False,
+    model_name: str | None = None,
+    prompt_version: str | None = None,
+) -> pd.DataFrame:
     """
     DB에서 차트 생성용 데이터 조회.
     - 기본 동작: 데이터가 없거나 실패 시 빈 DataFrame 반환
@@ -46,8 +51,16 @@ def fetch_dataframe_for_chart(db_path: str, use_mock: bool = False) -> pd.DataFr
                     a.confidence
                 FROM clean_reviews c
                 JOIN analysis_results a ON c.id = a.review_id
+                WHERE (? IS NULL OR a.model_name = ?)
+                  AND (? IS NULL OR a.prompt_version = ?)
             """
-            df = pd.read_sql_query(query, conn)
+            params = (
+                model_name,
+                model_name,
+                prompt_version,
+                prompt_version,
+            )
+            df = pd.read_sql_query(query, conn, params=params)
             return df
     except Exception as e:
         print(f"[경고] 차트용 DB 조회 실패 (데이터 없음 처리): {e}")
@@ -229,11 +242,18 @@ def build_charts(
     output_dir: str = "output",
     use_mock: bool = False,
     dpi: int = 300,
+    model_name: str | None = None,
+    prompt_version: str | None = None,
 ) -> list[str]:
     """메인 진입점: 데이터가 없으면 차트 생성을 생략하고 빈 리스트 반환"""
     setup_korean_font()
     os.makedirs(output_dir, exist_ok=True)
-    df = fetch_dataframe_for_chart(db_path, use_mock=use_mock)
+    df = fetch_dataframe_for_chart(
+        db_path,
+        use_mock=use_mock,
+        model_name=model_name,
+        prompt_version=prompt_version,
+    )
 
     if df.empty:
         print("[안내] 분석된 리뷰 데이터가 없어 차트 생성을 건너뜁니다.")
