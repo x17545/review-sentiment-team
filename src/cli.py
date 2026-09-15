@@ -609,6 +609,15 @@ def cmd_dashboard(args: argparse.Namespace, config: dict[str, Any]) -> None:
     from src.reporter import build_report, build_html_report
 
 
+    ai_config = config.get("ai", {})
+
+    model_name = ai_config.get("model")
+    if not model_name:
+        raise SystemExit("[오류] config.json의 ai.model 설정이 필요합니다.")
+
+    prompt_version = ai_config.get("prompt_version", "v1")
+
+
     visualization_config = config.get("visualization", {})
     dpi = visualization_config.get("dpi", 300)
     # 1) 차트 생성 (데이터 없으면 build_charts가 빈 리스트 반환)
@@ -616,13 +625,25 @@ def cmd_dashboard(args: argparse.Namespace, config: dict[str, Any]) -> None:
         args.db,
         output_dir=args.output,
         dpi=dpi,
+        model_name=model_name,
+        prompt_version=prompt_version,
     )
     # 2) 차트 경로를 넘겨 종합 리포트 생성 (TXT)
-    report_path = build_report(args.db, output_dir=args.output,
-                               chart_paths=chart_paths)
+    report_path = build_report(
+        args.db,
+        output_dir=args.output,
+        chart_paths=chart_paths,
+        model_name=model_name,
+        prompt_version=prompt_version,
+    )
     # 3) HTML 대시보드 생성 (차트를 base64로 삽입한 단일 파일)
-    html_path = build_html_report(args.db, output_dir=args.output,
-                                  chart_paths=chart_paths)
+    html_path = build_html_report(
+        args.db,
+        output_dir=args.output,
+        chart_paths=chart_paths,
+        model_name=model_name,
+        prompt_version=prompt_version,
+    )
     print(f"\n리포트 저장: {report_path}")
     print(f"HTML 대시보드: {html_path}")
     if chart_paths:
@@ -634,12 +655,22 @@ def cmd_dashboard(args: argparse.Namespace, config: dict[str, Any]) -> None:
 def cmd_export(args: argparse.Namespace, config: dict[str, Any]) -> None:
     from src.reporter import export
 
+    ai_config = config.get("ai", {})
+
+    model_name = ai_config.get("model")
+    if not model_name:
+        raise SystemExit("[오류] config.json의 ai.model 설정이 필요합니다.")
+
+    prompt_version = ai_config.get("prompt_version", "v1")
+
     export_path = export(
         db_path=args.db,
         format=args.format,
         sentiment=args.sentiment,
         rating_min=args.rating_min,
         output=args.output,
+        model_name=model_name,
+        prompt_version=prompt_version,
     )
     print(f"\n내보내기 저장: {export_path}")
 
