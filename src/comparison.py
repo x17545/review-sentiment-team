@@ -9,10 +9,10 @@ src/comparison.py
 """
 
 import json
-import sqlite3
 import re
+import sqlite3
 from collections import Counter
-from typing import Any, Optional
+from typing import Any
 
 
 def get_available_products(conn: sqlite3.Connection) -> list[str]:
@@ -107,8 +107,8 @@ def compare_products_data(
                     neu_keywords = [w for w in all_kw if w not in pos_keywords and w not in neg_keywords]
                 if ext_row["summary"]:
                     summary = ext_row["summary"]
-            except Exception:
-                pass
+            except sqlite3.Error as e:
+                print(f"[경고] 비교 분석용 DB 조회 실패: {e}")
 
         # extraction_results에 없을 경우 본문 텍스트 기반 보조 키워드 추출
         if not pos_keywords and not neg_keywords and not neu_keywords:

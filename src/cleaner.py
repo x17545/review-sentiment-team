@@ -1,6 +1,8 @@
 import hashlib
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
+KST = timezone(timedelta(hours=9))
 
 
 def normalize_text(text: str) -> str:
@@ -68,7 +70,7 @@ def normalize_date(date_value):
 
     for date_format in formats:
         try:
-            parsed_date = datetime.strptime(date_text, date_format)
+            parsed_date = datetime.strptime(date_text, date_format).replace(tzinfo=KST)
             return parsed_date.strftime("%Y-%m-%d")
         except ValueError:
             continue

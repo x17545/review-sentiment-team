@@ -1,5 +1,6 @@
 # main.py
 import sys
+
 from src.cli import main, run_interactive
 
 if __name__ == "__main__":

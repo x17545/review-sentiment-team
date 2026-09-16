@@ -3,14 +3,18 @@ src/reporter.py
 품질 지표 계산, 종합 대시보드 리포트 생성 및 데이터 Export 모듈.
 """
 
-import os
-import json
 import base64
 import datetime
 import html
-import pandas as pd
-from typing import Optional
+import json
+import logging
+import os
+import sqlite3
 
+import pandas as pd
+
+KST = datetime.timezone(datetime.timedelta(hours=9))
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
 def calculate_metrics(df: pd.DataFrame) -> dict:
     """비즈니스 핵심 품질 지표 계산 (데이터가 없을 경우 0 처리)"""
@@ -57,16 +61,31 @@ def calculate_metrics(df: pd.DataFrame) -> dict:
     }
 
 
-def fetch_extraction_data(db_path: str) -> dict:
+def fetch_extraction_data(
+    db_path: str,
+    model_name: str | None = None,
+    prompt_version: str | None = None,
+) -> dict:
     """extraction_results 테이블에서 최신 키워드 및 요약 정보 조회"""
     try:
         from src.repository import get_connection
         with get_connection(db_path) as conn:
-            row = conn.execute("""
+            row = conn.execute(
+                """
                 SELECT positive_keywords_json, negative_keywords_json, summary, suggestions
-                FROM extraction_results 
-                ORDER BY id DESC LIMIT 1
-            """).fetchone()
+                FROM extraction_results
+                WHERE (? IS NULL OR model_name = ?)
+                  AND (? IS NULL OR prompt_version = ?)
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (
+                    model_name,
+                    model_name,
+                    prompt_version,
+                    prompt_version,
+                ),
+            ).fetchone()
             
             if row and (row["positive_keywords_json"] or row["summary"]):
                 pos_kw = json.loads(row["positive_keywords_json"] or "[]")
@@ -77,7 +96,7 @@ def fetch_extraction_data(db_path: str) -> dict:
                     "summary": row["summary"] or "분석된 요약 정보가 없습니다.",
                     "suggestions": row["suggestions"] or "등록된 개선 제안이 없습니다.",
                 }
-    except Exception as e:
+    except sqlite3.Error as e:
         print(f"[경고] 키워드 DB 조회 실패: {e}")
 
     return {
@@ -91,7 +110,7 @@ def fetch_extraction_data(db_path: str) -> dict:
 def build_report(
     db_path: str,
     output_dir: str = "output",
-    chart_paths: list[str] = None,
+    chart_paths: list[str] | None = None,
     use_mock: bool = False,
     model_name: str | None = None,
     prompt_version: str | None = None,
@@ -107,7 +126,7 @@ def build_report(
         prompt_version=prompt_version,
     )
     ai_data = fetch_extraction_data(db_path)
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = datetime.datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
 
     if df.empty:
         report = f"""============================================================
@@ -195,7 +214,7 @@ def build_report(
     return txt_path
 
 
-def _img_to_base64(path: str) -> Optional[str]:
+def _img_to_base64(path: str) -> str | None:
     """PNG 파일을 base64 data URI로 변환. 파일이 없으면 None."""
     if not path or not os.path.exists(path):
         return None
@@ -282,7 +301,7 @@ def build_recent_reviews_html(reviews: list[dict]) -> str:
 def build_html_report(
     db_path: str,
     output_dir: str = "output",
-    chart_paths: list[str] = None,
+    chart_paths: list[str] | None = None,
     use_mock: bool = False,
     model_name: str | None = None,
     prompt_version: str | None = None,
@@ -304,7 +323,7 @@ def build_html_report(
     ai_data = fetch_extraction_data(db_path)
     recent_reviews = fetch_recent_reviews(db_path, limit=10)
     recent_reviews_html = build_recent_reviews_html(recent_reviews)
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = datetime.datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
 
     html_path = os.path.join(output_dir, "dashboard.html")
 
@@ -493,8 +512,8 @@ ul { margin:0; padding-left:20px; line-height:1.9; }
 def export(
     db_path: str,
     format: str,
-    sentiment: Optional[str] = None,
-    rating_min: Optional[int] = None,
+    sentiment: str | None = None,
+    rating_min: int | None = None,
     output: str = "output",
     use_mock: bool = False,
     model_name: str | None = None,
@@ -532,8 +551,8 @@ def export(
                     prompt_version,
                 )
                 df = pd.read_sql_query(query, conn, params=params)
-        except Exception:
-            pass
+        except sqlite3.Error as e:
+            print(f"[경고] 리뷰 조회 실패: {e}")
 
     if df.empty:
         print("[안내] DB에 내보낼 분석 데이터가 없습니다. 빈 템플릿으로 저장합니다.")
@@ -545,7 +564,7 @@ def export(
         if rating_min is not None and "rating" in df.columns:
             df = df[df["rating"] >= rating_min]
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.datetime.now(KST).strftime("%Y%m%d_%H%M%S")
     file_ext = "xlsx" if format == "excel" else format
     filename = f"exported_reviews_{timestamp}.{file_ext}"
     export_path = os.path.join(output, filename)

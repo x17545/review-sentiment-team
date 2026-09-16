@@ -21,15 +21,17 @@ CLI 진입 계층.
       python src/cli.py list --sentiment 긍정
 """
 
-import sys
-import json
-import sqlite3
 import argparse
+import json
 import logging
+import sqlite3
+import sys
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from datetime import datetime
-from typing import Optional, Callable, Any
+from typing import Any
 
+KST = timezone(timedelta(hours=9))
 
 DEFAULT_DB_PATH = "data/reviews.db"
 DEFAULT_CONFIG_PATH = "config.json"
@@ -151,7 +153,7 @@ def date_str(value: str) -> str:
     text = value.strip()
     for fmt in ("%Y-%m-%d", "%Y%m%d", "%Y/%m/%d", "%Y.%m.%d"):
         try:
-            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+            return datetime.strptime(text, fmt).replace(tzinfo=KST).strftime("%Y-%m-%d")
         except ValueError:
             continue
     raise argparse.ArgumentTypeError(f"날짜 형식은 YYYY-MM-DD 여야 합니다: {value!r}")
@@ -232,7 +234,7 @@ normalize_sort = make_choice_normalizer(
 )
 
 
-def validate_date_range(date_from: Optional[str], date_to: Optional[str]) -> None:
+def validate_date_range(date_from: str | None, date_to: str | None) -> None:
     """시작일이 종료일보다 늦으면 오류. (YYYY-MM-DD 문자열 비교로 순서 판정)"""
     if date_from and date_to and date_from > date_to:
         raise SystemExit(
@@ -605,8 +607,8 @@ def cmd_stats(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
 
 def cmd_dashboard(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    from src.reporter import build_html_report, build_report
     from src.visualizer import build_charts
-    from src.reporter import build_report, build_html_report
 
 
     ai_config = config.get("ai", {})
@@ -677,8 +679,9 @@ def cmd_export(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
 def cmd_alert(args: argparse.Namespace, config: dict[str, Any]) -> None:
     from datetime import date
-    from src.repository import get_connection
+
     from src.alert import detect_negative_surge
+    from src.repository import get_connection
 
     if args.end_date:
         try:
@@ -686,7 +689,7 @@ def cmd_alert(args: argparse.Namespace, config: dict[str, Any]) -> None:
         except ValueError as exc:
             raise SystemExit("[오류] --end-date는 YYYY-MM-DD 형식이어야 합니다.") from exc
     else:
-        end_date = date.today()
+        end_date = datetime.now(KST).date()
 
     with get_connection(args.db) as conn:
         result = detect_negative_surge(
@@ -729,8 +732,12 @@ def cmd_alert(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
 
 def cmd_compare(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    from src.comparison import (
+        compare_products_data,
+        format_comparison_table,
+        get_available_products,
+    )
     from src.repository import get_connection
-    from src.comparison import get_available_products, compare_products_data, format_comparison_table
 
     model_name = config.get("ai", {}).get("model", "")
     prompt_version = config.get("ai", {}).get("prompt_version", "v1")
@@ -893,7 +900,7 @@ def build_parser() -> argparse.ArgumentParser:
 #   원리: 사용자 답변을 argv 리스트로 조립한 뒤, 그대로 main(argv)에 넘긴다.
 #         파싱·검증·정규화는 기존 build_parser()가 100% 담당하므로 규칙이 한 벌뿐.
 # ---------------------------------------------------------------------------
-def add_option(argv: list[str], flag: str, value: Optional[str]) -> None:
+def add_option(argv: list[str], flag: str, value: str | None) -> None:
     """값이 있으면 argv에 [flag, value]를 추가. 빈 값(엔터)이면 무시 = 필터 없음."""
     if value:
         argv += [flag, value]
@@ -1066,7 +1073,7 @@ def run_interactive() -> int:
         except SystemExit as e:
             # 검증 실패 등으로 인한 종료도 프로그램 전체를 끝내지 않고 메뉴로 복귀
             if e.code not in (0, None):
-                eprint(f"(명령이 중단되었습니다.)")
+                eprint("(명령이 중단되었습니다.)")
 
         # 결과를 읽을 시간을 준 뒤 메뉴로 복귀
         eprint("-" * 52)
@@ -1080,7 +1087,7 @@ def run_interactive() -> int:
 # ---------------------------------------------------------------------------
 # 진입점
 # ---------------------------------------------------------------------------
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 

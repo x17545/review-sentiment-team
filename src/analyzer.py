@@ -20,8 +20,8 @@ from src.ai_client import (
 from src.repository import (
     get_connection,
     get_reviews_for_analysis,
-    insert_analysis_result,
     get_reviews_for_extraction,
+    insert_analysis_result,
     insert_extraction_result,
 )
 
@@ -84,7 +84,7 @@ def analyze_reviews(
                 **result,
             })
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             results.append({
                 "review_text": review_text,
                 "status": "failed",
