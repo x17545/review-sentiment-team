@@ -1,4 +1,5 @@
 .env
+.venv/
 data/raw/*.csv
 !data/raw/sample_reviews.csv
 data/clean/*.csv
