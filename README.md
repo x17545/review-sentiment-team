@@ -998,13 +998,15 @@ logs/app.log
 
 | 담당 | 주요 역할 |
 | --- | --- |
-| 조장 - 양승현 | `collector.py`, `cleaner.py`, 전체 통합 및 테스트 |
+| 조장 - 양승현 | `collector.py`, `cleaner.py`, 전체 기능 통합 및 최종 테스트, 버그 수정, 코드 품질 점검(Ruff), Git/PR 통합 관리 |
 | 박상훈 | `repository.py`, `cli.py` |
 | 안소연 | `ai_client.py`, `analyzer.py`, AI/CLI 연동 |
 | 정형경 | `visualizer.py`, `reporter.py` |
 
 각 기능을 모듈 단위로 나누어 구현한 뒤,
 Git 브랜치와 Pull Request를 이용하여 통합했습니다.
+최종 단계에서는 조장이 전체 기능 회귀 테스트, 통계 및 대시보드 오류 수정,
+코드 품질 점검과 최종 PR 병합을 수행했습니다.
 
 ---
 
