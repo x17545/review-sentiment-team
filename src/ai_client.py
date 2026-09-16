@@ -14,7 +14,6 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
-
 load_dotenv()
 
 
@@ -264,7 +263,7 @@ def analyze_sentiment(
             "raw_response": text,
         }
 
-    except Exception as e:
+    except Exception as e: # noqa: BLE001
         return {
             "status": "failed",
             "sentiment": "unknown",
@@ -403,7 +402,7 @@ suggestions: 제안1 | 제안2 | 제안3
             "raw_response": text,
         }
 
-    except Exception as e:
+    except Exception as e: # noqa: BLE001
         return {
             "status": "failed",
             "error": str(e),

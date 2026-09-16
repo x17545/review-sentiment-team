@@ -1,10 +1,9 @@
 # src/repository.py
 
 import sqlite3
-from pathlib import Path
 from contextlib import contextmanager
-from typing import Optional, Any
-
+from pathlib import Path
+from typing import Any
 
 DEFAULT_DB_PATH = "data/reviews.db"
 
@@ -248,10 +247,10 @@ def insert_raw_review(
     conn: sqlite3.Connection,
     source_file: str,
     raw_text: str,
-    original_row_number: Optional[int] = None,
-    raw_rating: Optional[float] = None,
-    raw_date: Optional[str] = None,
-    raw_product: Optional[str] = None,
+    original_row_number: int | None = None,
+    raw_rating: float | None = None,
+    raw_date: str | None = None,
+    raw_product: str | None = None,
 ) -> int:
     """
     원본 리뷰 1건을 raw_reviews에 저장합니다.
@@ -287,9 +286,9 @@ def insert_clean_review_skip_duplicate(
     source_file: str,
     text_hash: str,
     cleaned_text: str,
-    rating: Optional[float] = None,
-    review_date: Optional[str] = None,
-    product_name: Optional[str] = None,
+    rating: float | None = None,
+    review_date: str | None = None,
+    product_name: str | None = None,
 ) -> dict[str, Any]:
     """
     [DEPRECATED / 3-1 정리] 구버전 함수. 신버전 insert_clean_review()로 위임합니다.
@@ -319,8 +318,8 @@ def insert_analysis_result(
     sentiment: str,
     model_name: str,
     prompt_version: str = "v1",
-    confidence: Optional[float] = None,
-    raw_response: Optional[str] = None,
+    confidence: float | None = None,
+    raw_response: str | None = None,
 ) -> dict[str, Any]:
     """
     감정 분석 결과를 analysis_results에 저장합니다.
@@ -375,13 +374,13 @@ def insert_extraction_result(
     model_name: str,
     prompt_version: str = "v1",
     condition_json: str = "{}",
-    review_ids_json: Optional[str] = None,
-    positive_keywords_json: Optional[str] = None,
-    negative_keywords_json: Optional[str] = None,
-    keywords_json: Optional[str] = None,
-    summary: Optional[str] = None,
-    suggestions: Optional[str] = None,
-    raw_response: Optional[str] = None,
+    review_ids_json: str | None = None,
+    positive_keywords_json: str | None = None,
+    negative_keywords_json: str | None = None,
+    keywords_json: str | None = None,
+    summary: str | None = None,
+    suggestions: str | None = None,
+    raw_response: str | None = None,
 ) -> int:
     """
     키워드, 요약, 개선 제안 결과를 extraction_results에 저장합니다.
@@ -423,7 +422,7 @@ def get_unanalyzed_reviews(
     conn: sqlite3.Connection,
     model_name: str,
     prompt_version: str = "v1",
-    limit: Optional[int] = None,
+    limit: int | None = None,
 ) -> list[sqlite3.Row]:
     """
     [DEPRECATED / 3-1 정리] 구버전 함수. 신버전 get_reviews_for_analysis()로 위임합니다.
@@ -482,7 +481,7 @@ def get_review_count(conn: sqlite3.Connection) -> dict[str, int]:
     """).fetchone()["count"]
 
     analysis_count = conn.execute("""
-    SELECT COUNT(*) AS count
+    SELECT COUNT(DISTINCT review_id) AS count
     FROM analysis_results
     """).fetchone()["count"]
 
@@ -640,11 +639,11 @@ def insert_clean_review(
 
 def get_reviews_for_analysis(
     conn: sqlite3.Connection,
-    review_id: Optional[int] = None,
+    review_id: int | None = None,
     analyze_all: bool = False,
-    model_name: Optional[str] = None,
+    model_name: str | None = None,
     prompt_version: str = "v1",
-    limit: Optional[int] = None,
+    limit: int | None = None,
 ) -> list[sqlite3.Row]:
     """
     감정 분석 대상 리뷰를 조회합니다. (CLI의 --id / --all / --unanalyzed 대응)
@@ -713,13 +712,13 @@ def get_reviews_for_analysis(
 
 def get_reviews_for_extraction(
     conn: sqlite3.Connection,
-    sentiment: Optional[str] = None,
-    product: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    model_name: Optional[str] = None,
+    sentiment: str | None = None,
+    product: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    model_name: str | None = None,
     prompt_version: str = "v1",
-    limit: Optional[int] = None,
+    limit: int | None = None,
 ) -> list[sqlite3.Row]:
     """
     키워드/요약 추출 대상 리뷰를 조건별로 조회합니다.
@@ -806,11 +805,11 @@ _SORT_MAP = {
 
 def list_reviews(
     conn: sqlite3.Connection,
-    sentiment: Optional[str] = None,
-    rating: Optional[int] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    model_name: Optional[str] = None,
+    sentiment: str | None = None,
+    rating: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    model_name: str | None = None,
     prompt_version: str = "v1",
     sort: str = "date_desc",
     page: int = 1,
@@ -904,9 +903,9 @@ def list_reviews(
 def get_review_by_id(
     conn: sqlite3.Connection,
     review_id: int,
-    model_name: Optional[str] = None,
+    model_name: str | None = None,
     prompt_version: str = "v1",
-) -> Optional[sqlite3.Row]:
+) -> sqlite3.Row | None:
     """
     특정 리뷰 1건의 상세를 조회합니다. (CLI show 대응)
 

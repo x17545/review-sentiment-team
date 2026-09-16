@@ -8,9 +8,11 @@ src/visualizer.py
 
 import os
 import platform
+import random
+import sqlite3
+
 import matplotlib.pyplot as plt
 import pandas as pd
-import random
 
 
 def setup_korean_font():
@@ -62,7 +64,7 @@ def fetch_dataframe_for_chart(
             )
             df = pd.read_sql_query(query, conn, params=params)
             return df
-    except Exception as e:
+    except sqlite3.Error as e:
         print(f"[경고] 차트용 DB 조회 실패 (데이터 없음 처리): {e}")
         return pd.DataFrame()
 
@@ -125,7 +127,7 @@ def plot_sentiment_distribution(
         pctdistance=0.78,
         startangle=140,
         colors=colors,
-        wedgeprops=dict(width=0.4, edgecolor="w", linewidth=2)
+        wedgeprops={"width": 0.4, "edgecolor": "w", "linewidth": 2}
     )
     plt.title("고객 리뷰 감정 분포 (Sentiment Distribution)", fontsize=13, pad=15, weight="bold")
     plt.tight_layout()
@@ -180,7 +182,7 @@ def plot_sentiment_trend(
     plt.ylabel("리뷰 수", fontsize=10)
     
     max_val = int(trend[["positive", "neutral", "negative"]].max().max())
-    plt.yticks(range(0, max(max_val + 2, 4)))
+    plt.yticks(range(max(max_val + 2, 4)))
     
     plt.xticks(rotation=45)
     plt.grid(True, linestyle="--", alpha=0.5)
@@ -226,7 +228,7 @@ def plot_rating_sentiment_matrix(
     plt.ylabel("리뷰 수", fontsize=10)
     
     max_y = int(pivot.sum(axis=1).max())
-    ax.set_yticks(range(0, max(max_y + 2, 4)))
+    ax.set_yticks(range(max(max_y + 2, 4)))
     
     plt.xticks(ticks=range(5), labels=["1.0", "2.0", "3.0", "4.0", "5.0"], rotation=0)
     plt.grid(axis="y", linestyle="--", alpha=0.5)

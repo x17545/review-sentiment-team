@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 
 from src.ai_client import analyze_sentiment
 
-
 INPUT_FILE = Path("prompt_validation.csv")
 OUTPUT_FILE = Path("prompt_validation_results.csv")
 CONFIG_FILE = Path("config.json")
